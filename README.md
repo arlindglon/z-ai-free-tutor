@@ -283,7 +283,7 @@ Vercel সার্ভার **US/EU-তে** থাকে → sandbox-এর �
 | Name | Value | নোট |
 |---|---|---|
 | `ZAI_API_KEY` | তোমার Z.ai key | fallback চালু হবে |
-| `ZAI_MODEL` | `glm-4.5-flash` | ঐচ্ছিক — Z.ai ড্যাশবোর্ডে যে ফ্রি Flash মডেল আছে সেটা দাও |
+| `ZAI_MODEL` | `glm-4.7-flash` | ঐচ্ছিক — ফ্রি (GLM-4.5-Flash-ও ফ্রি) |
 | `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | ঐচ্ছিক — ডিফল্ট এটাই |
 
 3. এবার ইঞ্জিন চেইন: **Gemini key pool → Z.ai ফলব্যাক** — Gemini-র সব key মরে গেলেও শিক্ষার্থী উত্তর পাবে!

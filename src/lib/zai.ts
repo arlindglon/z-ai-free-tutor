@@ -20,7 +20,7 @@ type ZAIInstance = Awaited<ReturnType<typeof ZAI.create>>
 let instance: ZAIInstance | null = null
 
 const ENV_API_KEY = process.env.ZAI_API_KEY?.trim() || ''
-const ENV_MODEL = process.env.ZAI_MODEL?.trim() || 'glm-4.5-flash'
+const ENV_MODEL = process.env.ZAI_MODEL?.trim() || 'glm-4.7-flash'
 const ENV_BASE_URL =
   (process.env.ZAI_BASE_URL?.trim() || 'https://api.z.ai/api/paas/v4').replace(/\/+$/, '')
 
