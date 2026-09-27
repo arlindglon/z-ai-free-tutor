@@ -1,0 +1,817 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→import { useCallback, useEffect, useRef, useState } from 'react'
+     4→     4→import {
+     5→     5→  CloudUpload,
+     6→     6→  FileText,
+     7→     7→  FileUp,
+     8→     8→  Loader2,
+     9→     9→  PenLine,
+    10→    10→  Sparkles,
+    11→    11→  Trash2,
+    12→    12→  X,
+    13→    13→} from 'lucide-react'
+    14→    14→import { Alert, AlertDescription } from '@/components/ui/alert'
+    15→    15→import { Badge } from '@/components/ui/badge'
+    16→    16→import { Button } from '@/components/ui/button'
+    17→    17→import { Card, CardContent } from '@/components/ui/card'
+    18→    18→import { Input } from '@/components/ui/input'
+    19→    19→import { Label } from '@/components/ui/label'
+    20→    20→import { Progress } from '@/components/ui/progress'
+    21→    21→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    22→    22→import { Skeleton } from '@/components/ui/skeleton'
+    23→    23→import { Textarea } from '@/components/ui/textarea'
+    24→    24→import { api, ApiError } from '@/lib/api'
+    25→    25→import { SUBJECTS, toBn } from '@/lib/bn'
+    26→    26→import type { BookInfo } from '@/lib/types'
+    27→    27→
+    28→    28→type DraftChapter = {
+    29→    29→  title: string
+    30→    30→  number?: number
+    31→    31→  pageStart?: number
+    32→    32→  content: string
+    33→    33→}
+    34→    34→
+    35→    35→type EmbedResult = { bookId: string; embeddedCount: number; remainingCount: number }
+    36→    36→
+    37→    37→type UploadResult = {
+    38→    38→  book: BookInfo
+    39→    39→  pageCount: number
+    40→    40→  chunkCount: number
+    41→    41→  autoEmbed: boolean
+    42→    42→}
+    43→    43→
+    44→    44→const MAX_PDF_BYTES = 150 * 1024 * 1024
+    45→    45→
+    46→    46→function formatSize(bytes: number): string {
+    47→    47→  const mb = bytes / (1024 * 1024)
+    48→    48→  if (mb >= 1) return `${mb.toFixed(1)} MB`
+    49→    49→  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+    50→    50→}
+    51→    51→
+    52→    52→export function BooksTab() {
+    53→    53→  const [books, setBooks] = useState<BookInfo[] | null>(null)
+    54→    54→  const [listError, setListError] = useState<string | null>(null)
+    55→    55→
+    56→    56→  // মোড টগল: PDF আপলোড (ডিফল্ট) / ম্যানুয়াল লেখা
+    57→    57→  const [mode, setMode] = useState<'pdf' | 'manual'>('pdf')
+    58→    58→
+    59→    59→  // PDF আপলোড স্টেট
+    60→    60→  const [file, setFile] = useState<File | null>(null)
+    61→    61→  const [dragging, setDragging] = useState(false)
+    62→    62→  const [uploading, setUploading] = useState(false)
+    63→    63→  const [uploadError, setUploadError] = useState<string | null>(null)
+    64→    64→  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
+    65→    65→  const [pdfSubject, setPdfSubject] = useState('')
+    66→    66→  const [pdfBoard, setPdfBoard] = useState('')
+    67→    67→  const fileInputRef = useRef<HTMLInputElement | null>(null)
+    68→    68→
+    69→    69→  // ম্যানুয়াল বইয়ের ফর্ম
+    70→    70→  const [title, setTitle] = useState('')
+    71→    71→  const [subject, setSubject] = useState<string>('')
+    72→    72→  const [board, setBoard] = useState('')
+    73→    73→  const [chTitle, setChTitle] = useState('')
+    74→    74→  const [chNumber, setChNumber] = useState('')
+    75→    75→  const [chPageStart, setChPageStart] = useState('')
+    76→    76→  const [chContent, setChContent] = useState('')
+    77→    77→  const [chapters, setChapters] = useState<DraftChapter[]>([])
+    78→    78→  const [saving, setSaving] = useState(false)
+    79→    79→  const [formError, setFormError] = useState<string | null>(null)
+    80→    80→  const [successMsg, setSuccessMsg] = useState<string | null>(null)
+    81→    81→
+    82→    82→  // এমবেড
+    83→    83→  const [busyBookId, setBusyBookId] = useState<string | null>(null)
+    84→    84→  const [embedResult, setEmbedResult] = useState<EmbedResult | null>(null)
+    85→    85→  const [embedError, setEmbedError] = useState<string | null>(null)
+    86→    86→
+    87→    87→  // দুই-ক্লিক কনফার্ম ডিলিট
+    88→    88→  const [confirmId, setConfirmId] = useState<string | null>(null)
+    89→    89→  const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    90→    90→  const clearConfirmTimer = useCallback(() => {
+    91→    91→    if (confirmTimer.current) {
+    92→    92→      clearTimeout(confirmTimer.current)
+    93→    93→      confirmTimer.current = null
+    94→    94→    }
+    95→    95→  }, [])
+    96→    96→
+    97→    97→  const loadBooks = useCallback(async () => {
+    98→    98→    setListError(null)
+    99→    99→    try {
+   100→   100→      const data = await api<{ books: BookInfo[] }>('/api/admin/books')
+   101→   101→      setBooks(data.books)
+   102→   102→    } catch (e) {
+   103→   103→      setListError(e instanceof ApiError ? e.message : 'বইয়ের তালিকা আনা গেল না, আবার চেষ্টা করো।')
+   104→   104→    }
+   105→   105→  }, [])
+   106→   106→
+   107→   107→  useEffect(() => {
+   108→   108→    void loadBooks()
+   109→   109→    return clearConfirmTimer
+   110→   110→  }, [loadBooks, clearConfirmTimer])
+   111→   111→
+   112→   112→  // কোনো বইয়ের অটো-এমবেড চলছে হলে প্রতি ৪ সেকেন্ডে প্রগ্রেস রিফ্রেশ
+   113→   113→  const anyAutoEmbedding = books?.some((b) => b.autoEmbedding) ?? false
+   114→   114→  useEffect(() => {
+   115→   115→    if (!anyAutoEmbedding) return
+   116→   116→    const t = setInterval(() => {
+   117→   117→      void loadBooks()
+   118→   118→    }, 4000)
+   119→   119→    return () => clearInterval(t)
+   120→   120→  }, [anyAutoEmbedding, loadBooks])
+   121→   121→
+   122→   122→  // ---------- PDF আপলোড ----------
+   123→   123→  function acceptFile(f: File | null | undefined) {
+   124→   124→    setUploadError(null)
+   125→   125→    setUploadSuccess(null)
+   126→   126→    if (!f) return
+   127→   127→    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+   128→   128→    if (!isPdf) {
+   129→   129→      setUploadError('শুধু PDF ফাইল দেওয়া যাবে।')
+   130→   130→      return
+   131→   131→    }
+   132→   132→    if (f.size > MAX_PDF_BYTES) {
+   133→   133→      setUploadError('ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।')
+   134→   134→      return
+   135→   135→    }
+   136→   136→    setFile(f)
+   137→   137→  }
+   138→   138→
+   139→   139→  function clearFile() {
+   140→   140→    setFile(null)
+   141→   141→    if (fileInputRef.current) fileInputRef.current.value = ''
+   142→   142→  }
+   143→   143→
+   144→   144→  async function handleUpload() {
+   145→   145→    if (uploading || !file) return
+   146→   146→    setUploading(true)
+   147→   147→    setUploadError(null)
+   148→   148→    setUploadSuccess(null)
+   149→   149→    try {
+   150→   150→      const fd = new FormData()
+   151→   151→      fd.append('file', file)
+   152→   152→      if (pdfSubject) fd.append('subject', pdfSubject)
+   153→   153→      if (pdfBoard.trim()) fd.append('board', pdfBoard.trim())
+   154→   154→
+   155→   155→      const res = await fetch('/api/admin/books/upload', {
+   156→   156→        method: 'POST',
+   157→   157→        body: fd,
+   158→   158→        credentials: 'same-origin',
+   159→   159→        cache: 'no-store',
+   160→   160→      })
+   161→   161→      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+   162→   162→      if (!res.ok) {
+   163→   163→        const msg =
+   164→   164→          typeof data.error === 'string' && data.error
+   165→   165→            ? data.error
+   166→   166→            : 'আপলোড করা গেল না, আবার চেষ্টা করো।'
+   167→   167→        throw new ApiError(
+   168→   168→          msg,
+   169→   169→          res.status,
+   170→   170→          typeof data.code === 'string' ? data.code : undefined,
+   171→   171→          data
+   172→   172→        )
+   173→   173→      }
+   174→   174→      const r = data as unknown as UploadResult
+   175→   175→      setUploadSuccess(
+   176→   176→        `"${r.book.title}" যোগ হয়েছে — ${toBn(r.pageCount)} পৃষ্ঠা থেকে ${toBn(
+   177→   177→          r.chunkCount
+   178→   178→        )}টি চাঙ্ক তৈরি হলো। এখন স্বয়ংক্রিয়ভাবে এমবেড হচ্ছে, তুমি কিছু করতে হবে না!`
+   179→   179→      )
+   180→   180→      clearFile()
+   181→   181→      setPdfSubject('')
+   182→   182→      setPdfBoard('')
+   183→   183→      await loadBooks()
+   184→   184→    } catch (e) {
+   185→   185→      setUploadError(e instanceof ApiError ? e.message : 'আপলোড করা গেল না, আবার চেষ্টা করো।')
+   186→   186→    } finally {
+   187→   187→      setUploading(false)
+   188→   188→    }
+   189→   189→  }
+   190→   190→
+   191→   191→  // ---------- ম্যানুয়াল ফর্ম (আগের মতোই) ----------
+   192→   192→  function addChapter() {
+   193→   193→    setFormError(null)
+   194→   194→    setSuccessMsg(null)
+   195→   195→    const t = chTitle.trim()
+   196→   196→    const c = chContent.trim()
+   197→   197→    if (!t) {
+   198→   198→      setFormError('অধ্যায়ের শিরোনাম দাও।')
+   199→   199→      return
+   200→   200→    }
+   201→   201→    if (c.length < 50) {
+   202→   202→      setFormError('লেখা খুব ছোট — অন্তত ৫০ অক্ষরের লেখা পেস্ট করো।')
+   203→   203→      return
+   204→   204→    }
+   205→   205→    const num = chNumber.trim() === '' ? undefined : Number(chNumber)
+   206→   206→    const page = chPageStart.trim() === '' ? undefined : Number(chPageStart)
+   207→   207→    if (num !== undefined && (!Number.isFinite(num) || num <= 0)) {
+   208→   208→      setFormError('অধ্যায় নম্বর সঠিক পজিটিভ সংখ্যা দাও।')
+   209→   209→      return
+   210→   210→    }
+   211→   211→    if (page !== undefined && (!Number.isFinite(page) || page <= 0)) {
+   212→   212→      setFormError('শুরু পৃষ্ঠা সঠিক পজিটিভ সংখ্যা দাও।')
+   213→   213→      return
+   214→   214→    }
+   215→   215→    setChapters((prev) => [...prev, { title: t, number: num, pageStart: page, content: c }])
+   216→   216→    setChTitle('')
+   217→   217→    setChNumber('')
+   218→   218→    setChPageStart('')
+   219→   219→    setChContent('')
+   220→   220→  }
+   221→   221→
+   222→   222→  function removeChapter(index: number) {
+   223→   223→    setChapters((prev) => prev.filter((_, i) => i !== index))
+   224→   224→  }
+   225→   225→
+   226→   226→  async function handleSave() {
+   227→   227→    if (saving) return
+   228→   228→    setFormError(null)
+   229→   229→    setSuccessMsg(null)
+   230→   230→    const t = title.trim()
+   231→   231→    if (t.length < 2) {
+   232→   232→      setFormError('বইয়ের নাম দাও।')
+   233→   233→      return
+   234→   234→    }
+   235→   235→    if (!subject) {
+   236→   236→      setFormError('বিষয় সিলেক্ট করো।')
+   237→   237→      return
+   238→   238→    }
+   239→   239→    if (!chapters.length) {
+   240→   240→      setFormError('কমপক্ষে একটি অধ্যায় যোগ করো।')
+   241→   241→      return
+   242→   242→    }
+   243→   243→    setSaving(true)
+   244→   244→    try {
+   245→   245→      const data = await api<{ book: BookInfo }>('/api/admin/books', {
+   246→   246→        method: 'POST',
+   247→   247→        body: {
+   248→   248→          title: t,
+   249→   249→          subject,
+   250→   250→          board: board.trim() || undefined,
+   251→   251→          chapters: chapters.map((ch) => ({
+   252→   252→            title: ch.title,
+   253→   253→            number: ch.number,
+   254→   254→            pageStart: ch.pageStart,
+   255→   255→            content: ch.content,
+   256→   256→          })),
+   257→   257→        },
+   258→   258→      })
+   259→   259→      setTitle('')
+   260→   260→      setSubject('')
+   261→   261→      setBoard('')
+   262→   262→      setChapters([])
+   263→   263→      setSuccessMsg(
+   264→   264→        `"${data.book.title}" সংরক্ষণ হয়েছে — ${toBn(data.book.chapters.length)}টি অধ্যায় যোগ হলো। এখন এমবেড করো!`
+   265→   265→      )
+   266→   266→      await loadBooks()
+   267→   267→    } catch (e) {
+   268→   268→      setFormError(e instanceof ApiError ? e.message : 'বই সংরক্ষণ করা গেল না, আবার চেষ্টা করো।')
+   269→   269→    } finally {
+   270→   270→      setSaving(false)
+   271→   271→    }
+   272→   272→  }
+   273→   273→
+   274→   274→  async function handleEmbed(book: BookInfo) {
+   275→   275→    if (busyBookId || book.autoEmbedding) return
+   276→   276→    setEmbedError(null)
+   277→   277→    setEmbedResult(null)
+   278→   278→    setBusyBookId(book.id)
+   279→   279→    try {
+   280→   280→      const data = await api<{ embeddedCount: number; remainingCount: number }>('/api/admin/embed', {
+   281→   281→        method: 'POST',
+   282→   282→        body: { bookId: book.id },
+   283→   283→      })
+   284→   284→      setEmbedResult({
+   285→   285→        bookId: book.id,
+   286→   286→        embeddedCount: data.embeddedCount,
+   287→   287→        remainingCount: data.remainingCount,
+   288→   288→      })
+   289→   289→      await loadBooks()
+   290→   290→    } catch (e) {
+   291→   291→      setEmbedError(e instanceof ApiError ? e.message : 'এমবেডিং করা গেল না, আবার চেষ্টা করো।')
+   292→   292→    } finally {
+   293→   293→      setBusyBookId(null)
+   294→   294→    }
+   295→   295→  }
+   296→   296→
+   297→   297→  function handleDeleteClick(id: string) {
+   298→   298→    if (confirmId !== id) {
+   299→   299→      setConfirmId(id)
+   300→   300→      clearConfirmTimer()
+   301→   301→      confirmTimer.current = setTimeout(() => setConfirmId(null), 3000)
+   302→   302→      return
+   303→   303→    }
+   304→   304→    clearConfirmTimer()
+   305→   305→    setConfirmId(null)
+   306→   306→    void doDelete(id)
+   307→   307→  }
+   308→   308→
+   309→   309→  async function doDelete(id: string) {
+   310→   310→    setEmbedError(null)
+   311→   311→    try {
+   312→   312→      await api<{ ok: true }>(`/api/admin/books/${id}`, { method: 'DELETE' })
+   313→   313→      setBooks((prev) => (prev ? prev.filter((b) => b.id !== id) : prev))
+   314→   314→      setEmbedResult(null)
+   315→   315→    } catch (e) {
+   316→   316→      setListError(e instanceof ApiError ? e.message : 'বই মুছে ফেলা গেল না।')
+   317→   317→    }
+   318→   318→  }
+   319→   319→
+   320→   320→  function bookAllEmbedded(book: BookInfo): boolean {
+   321→   321→    return (
+   322→   322→      book.chapters.length > 0 &&
+   323→   323→      book.chapters.every((c) => c.chunkCount > 0 && c.embeddedCount >= c.chunkCount)
+   324→   324→    )
+   325→   325→  }
+   326→   326→
+   327→   327→  function embedLabel(book: BookInfo): string {
+   328→   328→    if (book.autoEmbedding) return 'অটো-এমবেড চলছে...'
+   329→   329→    if (busyBookId === book.id) return 'এমবেড হচ্ছে...'
+   330→   330→    const res = embedResult && embedResult.bookId === book.id ? embedResult : null
+   331→   331→    if (res && res.remainingCount > 0) return 'আরও এমবেড করুন'
+   332→   332→    if (bookAllEmbedded(book)) return 'সব এমবেডেড ✓'
+   333→   333→    return 'এমবেড করুন'
+   334→   334→  }
+   335→   335→
+   336→   336→  return (
+   337→   337→    <div className="flex flex-col gap-4">
+   338→   338→      {/* মোড টগল */}
+   339→   339→      <div className="flex w-full gap-1 rounded-full border border-emerald-100 bg-emerald-50/60 p-1 sm:w-fit">
+   340→   340→        <button
+   341→   341→          type="button"
+   342→   342→          onClick={() => setMode('pdf')}
+   343→   343→          aria-pressed={mode === 'pdf'}
+   344→   344→          className={`flex h-10 flex-1 items-center justify-center gap-1.5 rounded-full px-4 text-sm font-semibold transition-colors sm:flex-none ${
+   345→   345→            mode === 'pdf'
+   346→   346→              ? 'bg-emerald-600 text-white shadow-sm'
+   347→   347→              : 'text-emerald-700 hover:bg-emerald-100'
+   348→   348→          }`}
+   349→   349→        >
+   350→   350→          <FileUp className="h-4 w-4" />
+   351→   351→          PDF আপলোড
+   352→   352→        </button>
+   353→   353→        <button
+   354→   354→          type="button"
+   355→   355→          onClick={() => setMode('manual')}
+   356→   356→          aria-pressed={mode === 'manual'}
+   357→   357→          className={`flex h-10 flex-1 items-center justify-center gap-1.5 rounded-full px-4 text-sm font-semibold transition-colors sm:flex-none ${
+   358→   358→            mode === 'manual'
+   359→   359→              ? 'bg-emerald-600 text-white shadow-sm'
+   360→   360→              : 'text-emerald-700 hover:bg-emerald-100'
+   361→   361→          }`}
+   362→   362→        >
+   363→   363→          <PenLine className="h-4 w-4" />
+   364→   364→          ম্যানুয়াল লেখা
+   365→   365→        </button>
+   366→   366→      </div>
+   367→   367→
+   368→   368→      {/* ---------- PDF আপলোড মোড ---------- */}
+   369→   369→      {mode === 'pdf' && (
+   370→   370→        <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+   371→   371→          <CardContent className="flex flex-col gap-4 p-4">
+   372→   372→            <div>
+   373→   373→              <h3 className="font-semibold text-stone-900">PDF আপলোড করো — বাকি সব অটোমেটিক!</h3>
+   374→   374→              <p className="mt-1 text-xs text-stone-500">
+   375→   375→                আপলোডের পর স্বয়ংক্রিয়ভাবে: টেক্সট বের হবে → অধ্যায় চেনা হবে → চাঙ্ক তৈরি হবে →
+   376→   376→                এমবেড হয়ে ডেটাবেসে জমা হবে। তোমাকে আর কিছুই করতে হবে না।
+   377→   377→              </p>
+   378→   378→            </div>
+   379→   379→
+   380→   380→            <div
+   381→   381→              role="button"
+   382→   382→              tabIndex={0}
+   383→   383→              aria-label="PDF ফাইল বাছো বা টেনে আনো"
+   384→   384→              onClick={() => !uploading && fileInputRef.current?.click()}
+   385→   385→              onKeyDown={(e) => {
+   386→   386→                if ((e.key === 'Enter' || e.key === ' ') && !uploading) {
+   387→   387→                  e.preventDefault()
+   388→   388→                  fileInputRef.current?.click()
+   389→   389→                }
+   390→   390→              }}
+   391→   391→              onDragOver={(e) => {
+   392→   392→                e.preventDefault()
+   393→   393→                if (!uploading) setDragging(true)
+   394→   394→              }}
+   395→   395→              onDragLeave={() => setDragging(false)}
+   396→   396→              onDrop={(e) => {
+   397→   397→                e.preventDefault()
+   398→   398→                setDragging(false)
+   399→   399→                if (!uploading) acceptFile(e.dataTransfer.files?.[0])
+   400→   400→              }}
+   401→   401→              className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+   402→   402→                dragging
+   403→   403→                  ? 'border-emerald-400 bg-emerald-50'
+   404→   404→                  : 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50'
+   405→   405→              }`}
+   406→   406→            >
+   407→   407→              <input
+   408→   408→                ref={fileInputRef}
+   409→   409→                type="file"
+   410→   410→                accept="application/pdf,.pdf"
+   411→   411→                className="hidden"
+   412→   412→                onChange={(e) => acceptFile(e.target.files?.[0])}
+   413→   413→                disabled={uploading}
+   414→   414→              />
+   415→   415→              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+   416→   416→                {uploading ? (
+   417→   417→                  <Loader2 className="h-5 w-5 animate-spin text-emerald-700" />
+   418→   418→                ) : (
+   419→   419→                  <CloudUpload className="h-5 w-5 text-emerald-700" />
+   420→   420→                )}
+   421→   421→              </div>
+   422→   422→              {uploading ? (
+   423→   423→                <>
+   424→   424→                  <p className="text-sm font-semibold text-emerald-800">বই পড়া হচ্ছে…</p>
+   425→   425→                  <p className="text-xs text-stone-500">টেক্সট → অধ্যায় → চাঙ্ক তৈরি চলছে</p>
+   426→   426→                </>
+   427→   427→              ) : file ? (
+   428→   428→                <>
+   429→   429→                  <p className="max-w-full truncate px-2 text-sm font-semibold text-emerald-800">
+   430→   430→                    {file.name}
+   431→   431→                  </p>
+   432→   432→                  <p className="text-xs text-stone-500">{formatSize(file.size)} — আপলোড করতে নিচের বাটন চাপো</p>
+   433→   433→                </>
+   434→   434→              ) : (
+   435→   435→                <>
+   436→   436→                  <p className="text-sm font-semibold text-emerald-800">
+   437→   437→                    PDF ফাইল এখানে টেনে আনো, অথবা ক্লিক করে বাছো
+   438→   438→                  </p>
+   439→   439→                  <p className="text-xs text-stone-500">সর্বোচ্চ ১৫০ MB — টেক্সট-ভিত্তিক PDF (স্ক্যান করা ছবি নয়)</p>
+   440→   440→                </>
+   441→   441→              )}
+   442→   442→            </div>
+   443→   443→
+   444→   444→            {file && !uploading && (
+   445→   445→              <div className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-stone-50/70 p-3">
+   446→   446→                <FileText className="h-4 w-4 shrink-0 text-emerald-600" />
+   447→   447→                <span className="min-w-0 flex-1 truncate text-sm text-stone-700">{file.name}</span>
+   448→   448→                <span className="shrink-0 text-xs text-stone-400">{formatSize(file.size)}</span>
+   449→   449→                <button
+   450→   450→                  type="button"
+   451→   451→                  onClick={clearFile}
+   452→   452→                  aria-label="ফাইল বাদ দাও"
+   453→   453→                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-stone-400 hover:bg-stone-200 hover:text-stone-600"
+   454→   454→                >
+   455→   455→                  <X className="h-3.5 w-3.5" />
+   456→   456→                </button>
+   457→   457→              </div>
+   458→   458→            )}
+   459→   459→
+   460→   460→            <div className="grid gap-3 sm:grid-cols-2">
+   461→   461→              <div className="flex flex-col gap-1.5">
+   462→   462→                <Label htmlFor="pdf-subject" className="text-stone-700">
+   463→   463→                  বিষয় <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+   464→   464→                </Label>
+   465→   465→                <Select value={pdfSubject} onValueChange={setPdfSubject}>
+   466→   466→                  <SelectTrigger
+   467→   467→                    id="pdf-subject"
+   468→   468→                    className="h-11 w-full border-stone-200 focus-visible:ring-emerald-300"
+   469→   469→                  >
+   470→   470→                    <SelectValue placeholder="সাধারণ (ডিফল্ট)" />
+   471→   471→                  </SelectTrigger>
+   472→   472→                  <SelectContent>
+   473→   473→                    {SUBJECTS.map((s) => (
+   474→   474→                      <SelectItem key={s} value={s}>
+   475→   475→                        {s}
+   476→   476→                      </SelectItem>
+   477→   477→                    ))}
+   478→   478→                  </SelectContent>
+   479→   479→                </Select>
+   480→   480→              </div>
+   481→   481→              <div className="flex flex-col gap-1.5">
+   482→   482→                <Label htmlFor="pdf-board" className="text-stone-700">
+   483→   483→                  বোর্ড <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+   484→   484→                </Label>
+   485→   485→                <Input
+   486→   486→                  id="pdf-board"
+   487→   487→                  value={pdfBoard}
+   488→   488→                  onChange={(e) => setPdfBoard(e.target.value)}
+   489→   489→                  placeholder="NCTB (ডিফল্ট)"
+   490→   490→                  className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   491→   491→                />
+   492→   492→              </div>
+   493→   493→            </div>
+   494→   494→
+   495→   495→            {uploadError && (
+   496→   496→              <Alert variant="destructive" className="rounded-xl border-rose-200 bg-rose-50">
+   497→   497→                <AlertDescription className="text-rose-700">{uploadError}</AlertDescription>
+   498→   498→              </Alert>
+   499→   499→            )}
+   500→   500→            {uploadSuccess && (
+   501→   501→              <Alert className="rounded-xl border-emerald-200 bg-emerald-50">
+   502→   502→                <AlertDescription className="text-emerald-800">{uploadSuccess}</AlertDescription>
+   503→   503→              </Alert>
+   504→   504→            )}
+   505→   505→
+   506→   506→            <Button
+   507→   507→              type="button"
+   508→   508→              onClick={() => void handleUpload()}
+   509→   509→              disabled={!file || uploading}
+   510→   510→              className="h-11 w-full bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 sm:w-fit sm:px-6"
+   511→   511→            >
+   512→   512→              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
+   513→   513→              {uploading ? 'প্রসেস হচ্ছে...' : 'PDF আপলোড করো'}
+   514→   514→            </Button>
+   515→   515→          </CardContent>
+   516→   516→        </Card>
+   517→   517→      )}
+   518→   518→
+   519→   519→      {/* ---------- ম্যানুয়াল মোড (আগের ফর্ম) ---------- */}
+   520→   520→      {mode === 'manual' && (
+   521→   521→        <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+   522→   522→          <CardContent className="flex flex-col gap-4 p-4">
+   523→   523→            <div className="grid gap-4 sm:grid-cols-3">
+   524→   524→              <div className="flex flex-col gap-1.5 sm:col-span-1">
+   525→   525→                <Label htmlFor="book-title" className="text-stone-700">
+   526→   526→                  বইয়ের নাম
+   527→   527→                </Label>
+   528→   528→                <Input
+   529→   529→                  id="book-title"
+   530→   530→                  value={title}
+   531→   531→                  onChange={(e) => setTitle(e.target.value)}
+   532→   532→                  placeholder="যেমন: গণিত নবম-দশম"
+   533→   533→                  className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   534→   534→                />
+   535→   535→              </div>
+   536→   536→              <div className="flex flex-col gap-1.5">
+   537→   537→                <Label htmlFor="book-subject" className="text-stone-700">
+   538→   538→                  বিষয়
+   539→   539→                </Label>
+   540→   540→                <Select value={subject} onValueChange={setSubject}>
+   541→   541→                  <SelectTrigger
+   542→   542→                    id="book-subject"
+   543→   543→                    className="h-11 w-full border-stone-200 focus-visible:ring-emerald-300"
+   544→   544→                  >
+   545→   545→                    <SelectValue placeholder="বিষয় বাছো" />
+   546→   546→                  </SelectTrigger>
+   547→   547→                  <SelectContent>
+   548→   548→                    {SUBJECTS.map((s) => (
+   549→   549→                      <SelectItem key={s} value={s}>
+   550→   550→                        {s}
+   551→   551→                      </SelectItem>
+   552→   552→                    ))}
+   553→   553→                  </SelectContent>
+   554→   554→                </Select>
+   555→   555→              </div>
+   556→   556→              <div className="flex flex-col gap-1.5">
+   557→   557→                <Label htmlFor="book-board" className="text-stone-700">
+   558→   558→                  বোর্ড <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+   559→   559→                </Label>
+   560→   560→                <Input
+   561→   561→                  id="book-board"
+   562→   562→                  value={board}
+   563→   563→                  onChange={(e) => setBoard(e.target.value)}
+   564→   564→                  placeholder="NCTB"
+   565→   565→                  className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   566→   566→                />
+   567→   567→              </div>
+   568→   568→            </div>
+   569→   569→
+   570→   570→            <div className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3">
+   571→   571→              <p className="mb-3 text-sm font-semibold text-emerald-800">অধ্যায় যোগ করো</p>
+   572→   572→              <div className="grid gap-3 sm:grid-cols-3">
+   573→   573→                <div className="flex flex-col gap-1.5 sm:col-span-3 sm:grid sm:grid-cols-3 sm:gap-3">
+   574→   574→                  <div className="flex flex-col gap-1.5">
+   575→   575→                    <Label htmlFor="ch-title" className="text-stone-700">
+   576→   576→                      অধ্যায়ের শিরোনাম
+   577→   577→                    </Label>
+   578→   578→                    <Input
+   579→   579→                      id="ch-title"
+   580→   580→                      value={chTitle}
+   581→   581→                      onChange={(e) => setChTitle(e.target.value)}
+   582→   582→                      placeholder="যেমন: বীজগাণিতিক রাশি"
+   583→   583→                      className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   584→   584→                    />
+   585→   585→                  </div>
+   586→   586→                  <div className="flex flex-col gap-1.5">
+   587→   587→                    <Label htmlFor="ch-number" className="text-stone-700">
+   588→   588→                      অধ্যায় নম্বর <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+   589→   589→                    </Label>
+   590→   590→                    <Input
+   591→   591→                      id="ch-number"
+   592→   592→                      type="number"
+   593→   593→                      min={1}
+   594→   594→                      value={chNumber}
+   595→   595→                      onChange={(e) => setChNumber(e.target.value)}
+   596→   596→                      placeholder="যেমন: ৩"
+   597→   597→                      className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   598→   598→                    />
+   599→   599→                  </div>
+   600→   600→                  <div className="flex flex-col gap-1.5">
+   601→   601→                    <Label htmlFor="ch-page" className="text-stone-700">
+   602→   602→                      শুরু পৃষ্ঠা <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+   603→   603→                    </Label>
+   604→   604→                    <Input
+   605→   605→                      id="ch-page"
+   606→   606→                      type="number"
+   607→   607→                      min={1}
+   608→   608→                      value={chPageStart}
+   609→   609→                      onChange={(e) => setChPageStart(e.target.value)}
+   610→   610→                      placeholder="যেমন: ২৫"
+   611→   611→                      className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+   612→   612→                    />
+   613→   613→                  </div>
+   614→   614→                </div>
+   615→   615→                <div className="flex flex-col gap-1.5 sm:col-span-3">
+   616→   616→                  <Label htmlFor="ch-content" className="text-stone-700">
+   617→   617→                    বিষয়বস্তু
+   618→   618→                  </Label>
+   619→   619→                  <Textarea
+   620→   620→                    id="ch-content"
+   621→   621→                    rows={10}
+   622→   622→                    value={chContent}
+   623→   623→                    onChange={(e) => setChContent(e.target.value)}
+   624→   624→                    placeholder="বইয়ের এই অধ্যায়ের লেখা এখানে পেস্ট করো। স্ক্যান করা বই হলে OCR করে টেক্সট পেস্ট করো — যত বেশি বিস্তারিত, তত ভালো উত্তর!"
+   625→   625→                    className="border-stone-200 focus-visible:ring-emerald-300"
+   626→   626→                  />
+   627→   627→                </div>
+   628→   628→              </div>
+   629→   629→              <Button
+   630→   630→                type="button"
+   631→   631→                onClick={addChapter}
+   632→   632→                className="mt-3 h-11 w-full border border-emerald-300 bg-white text-emerald-700 shadow-sm hover:bg-emerald-50 sm:w-fit sm:px-4"
+   633→   633→              >
+   634→   634→                অধ্যায় যোগ করো
+   635→   635→              </Button>
+   636→   636→            </div>
+   637→   637→
+   638→   638→            {chapters.length > 0 && (
+   639→   639→              <div className="flex flex-wrap gap-2">
+   640→   640→                {chapters.map((ch, i) => (
+   641→   641→                  <Badge
+   642→   642→                    key={`${ch.title}-${i}`}
+   643→   643→                    variant="outline"
+   644→   644→                    className="h-8 gap-1 rounded-full border-emerald-200 bg-emerald-50 pl-3 pr-1 text-emerald-800"
+   645→   645→                  >
+   646→   646→                    <span className="max-w-48 truncate">
+   647→   647→                      {ch.number !== undefined ? `অধ্যায় ${toBn(ch.number)}. ` : ''}
+   648→   648→                      {ch.title}
+   649→   649→                    </span>
+   650→   650→                    <button
+   651→   651→                      type="button"
+   652→   652→                      onClick={() => removeChapter(i)}
+   653→   653→                      aria-label={`"${ch.title}" অধ্যায় বাদ দাও`}
+   654→   654→                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-emerald-600 hover:bg-emerald-100"
+   655→   655→                    >
+   656→   656→                      <X className="h-3.5 w-3.5" />
+   657→   657→                    </button>
+   658→   658→                  </Badge>
+   659→   659→                ))}
+   660→   660→              </div>
+   661→   661→            )}
+   662→   662→
+   663→   663→            {formError && (
+   664→   664→              <Alert variant="destructive" className="rounded-xl border-rose-200 bg-rose-50">
+   665→   665→                <AlertDescription className="text-rose-700">{formError}</AlertDescription>
+   666→   666→              </Alert>
+   667→   667→            )}
+   668→   668→            {successMsg && (
+   669→   669→              <Alert className="rounded-xl border-emerald-200 bg-emerald-50">
+   670→   670→                <AlertDescription className="text-emerald-800">{successMsg}</AlertDescription>
+   671→   671→              </Alert>
+   672→   672→            )}
+   673→   673→
+   674→   674→            <Button
+   675→   675→              type="button"
+   676→   676→              onClick={() => void handleSave()}
+   677→   677→              disabled={saving}
+   678→   678→              className="h-11 w-full bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 sm:w-fit sm:px-6"
+   679→   679→            >
+   680→   680→              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+   681→   681→              {saving ? 'সংরক্ষণ হচ্ছে...' : 'বই সংরক্ষণ করো'}
+   682→   682→            </Button>
+   683→   683→          </CardContent>
+   684→   684→        </Card>
+   685→   685→      )}
+   686→   686→
+   687→   687→      {/* এমবেড এরর */}
+   688→   688→      {embedError && (
+   689→   689→        <Alert variant="destructive" className="rounded-2xl border-rose-200 bg-rose-50">
+   690→   690→          <AlertDescription className="text-rose-700">{embedError}</AlertDescription>
+   691→   691→        </Alert>
+   692→   692→      )}
+   693→   693→
+   694→   694→      {/* বইয়ের তালিকা */}
+   695→   695→      {listError && (
+   696→   696→        <Alert variant="destructive" className="rounded-2xl border-rose-200 bg-rose-50">
+   697→   697→          <AlertDescription className="text-rose-700">{listError}</AlertDescription>
+   698→   698→        </Alert>
+   699→   699→      )}
+   700→   700→
+   701→   701→      {books === null && !listError ? (
+   702→   702→        <div className="flex flex-col gap-2">
+   703→   703→          {[0, 1].map((i) => (
+   704→   704→            <Skeleton key={i} className="h-32 w-full rounded-2xl bg-emerald-50" />
+   705→   705→          ))}
+   706→   706→        </div>
+   707→   707→      ) : books !== null && books.length === 0 ? (
+   708→   708→        <p className="rounded-2xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-stone-500">
+   709→   709→          এখনো কোনো বই নেই — উপরে PDF আপলোড করে প্রথম বই যোগ করো, বাকি সব অটোমেটিক হবে!
+   710→   710→        </p>
+   711→   711→      ) : books !== null ? (
+   712→   712→        <div className="flex flex-col gap-4">
+   713→   713→          {books.map((book) => {
+   714→   714→            const allDone = bookAllEmbedded(book)
+   715→   715→            return (
+   716→   716→              <Card key={book.id} className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+   717→   717→                <CardContent className="p-4">
+   718→   718→                  <div className="flex items-start justify-between gap-2">
+   719→   719→                    <div className="min-w-0">
+   720→   720→                      <h3 className="truncate font-semibold text-stone-900">{book.title}</h3>
+   721→   721→                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+   722→   722→                        <Badge className="border-emerald-200 bg-emerald-100 text-emerald-800">
+   723→   723→                          {book.subject}
+   724→   724→                        </Badge>
+   725→   725→                        {book.board && (
+   726→   726→                          <span className="text-xs text-stone-500">বোর্ড: {book.board}</span>
+   727→   727→                        )}
+   728→   728→                        {book.autoEmbedding && (
+   729→   729→                          <Badge className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700">
+   730→   730→                            <Loader2 className="h-3 w-3 animate-spin" />
+   731→   731→                            স্বয়ংক্রিয় এমবেড হচ্ছে…
+   732→   732→                          </Badge>
+   733→   733→                        )}
+   734→   734→                      </div>
+   735→   735→                    </div>
+   736→   736→                    <Button
+   737→   737→                      variant="ghost"
+   738→   738→                      onClick={() => handleDeleteClick(book.id)}
+   739→   739→                      disabled={busyBookId === book.id}
+   740→   740→                      aria-label="বই মুছে ফেলো"
+   741→   741→                      className={
+   742→   742→                        confirmId === book.id
+   743→   743→                          ? 'h-11 shrink-0 bg-rose-600 px-3 text-xs font-bold text-white hover:bg-rose-700 hover:text-white'
+   744→   744→                          : 'h-11 w-11 shrink-0 px-0 text-rose-600 hover:bg-rose-50'
+   745→   745→                      }
+   746→   746→                    >
+   747→   747→                      {confirmId === book.id ? 'নিশ্চিত?' : <Trash2 className="h-4 w-4" />}
+   748→   748→                    </Button>
+   749→   749→                  </div>
+   750→   750→
+   751→   751→                  <div className="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
+   752→   752→                    {book.chapters.map((ch) => {
+   753→   753→                      const pct = ch.chunkCount > 0 ? (ch.embeddedCount / ch.chunkCount) * 100 : 0
+   754→   754→                      return (
+   755→   755→                        <div
+   756→   756→                          key={ch.id}
+   757→   757→                          className="rounded-xl border border-emerald-50 bg-stone-50/70 p-3"
+   758→   758→                        >
+   759→   759→                          <p className="text-sm font-medium text-stone-800">
+   760→   760→                            {ch.number !== null ? `অধ্যায় ${toBn(ch.number)}. ` : ''}
+   761→   761→                            {ch.title}
+   762→   762→                          </p>
+   763→   763→                          <p className="mt-1 text-xs text-stone-500">
+   764→   764→                            চাঙ্ক: {toBn(ch.embeddedCount)}/{toBn(ch.chunkCount)} এমবেডেড
+   765→   765→                          </p>
+   766→   766→                          <Progress
+   767→   767→                            value={pct}
+   768→   768→                            aria-label={`${ch.title} এমবেড প্রগ্রেস`}
+   769→   769→                            className="mt-2 h-2 bg-emerald-100"
+   770→   770→                          />
+   771→   771→                        </div>
+   772→   772→                      )
+   773→   773→                    })}
+   774→   774→                    {book.chapters.length === 0 && (
+   775→   775→                      <p className="text-xs text-stone-400">এই বইয়ে কোনো অধ্যায় নেই।</p>
+   776→   776→                    )}
+   777→   777→                  </div>
+   778→   778→
+   779→   779→                  <div className="mt-3 flex flex-wrap items-center gap-3">
+   780→   780→                    <Button
+   781→   781→                      type="button"
+   782→   782→                      onClick={() => void handleEmbed(book)}
+   783→   783→                      disabled={busyBookId !== null || allDone || book.autoEmbedding}
+   784→   784→                      title={
+   785→   785→                        book.autoEmbedding
+   786→   786→                          ? 'অটো-এমবেড চলছে — শেষ হলে বাকি থাকলে আবার চাপতে পারো'
+   787→   787→                          : undefined
+   788→   788→                      }
+   789→   789→                      className="h-11 bg-emerald-600 px-4 text-white shadow-sm hover:bg-emerald-700"
+   790→   790→                    >
+   791→   791→                      {busyBookId === book.id || book.autoEmbedding ? (
+   792→   792→                        <Loader2 className="h-4 w-4 animate-spin" />
+   793→   793→                      ) : (
+   794→   794→                        <Sparkles className="h-4 w-4" />
+   795→   795→                      )}
+   796→   796→                      {embedLabel(book)}
+   797→   797→                    </Button>
+   798→   798→                    {embedResult && embedResult.bookId === book.id && (
+   799→   799→                      <p
+   800→   800→                        className={`text-xs font-medium ${
+   801→   801→                          embedResult.remainingCount > 0 ? 'text-amber-600' : 'text-emerald-700'
+   802→   802→                        }`}
+   803→   803→                      >
+   804→   804→                        {toBn(embedResult.embeddedCount)}টি এমবেড হলো, বাকি {toBn(embedResult.remainingCount)}
+   805→   805→                      </p>
+   806→   806→                    )}
+   807→   807→                  </div>
+   808→   808→                </CardContent>
+   809→   809→              </Card>
+   810→   810→            )
+   811→   811→          })}
+   812→   812→        </div>
+   813→   813→      ) : null}
+   814→   814→    </div>
+   815→   815→  )
+   816→   816→}
+   817→   817→

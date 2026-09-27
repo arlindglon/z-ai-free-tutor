@@ -1,4 +1,4 @@
-import { getActiveKeys } from '@/lib/keypool'
+import { getActiveKeys, GeminiError } from '@/lib/keypool'
 import { generateContent, type GeneratedAnswer } from '@/lib/gemini'
 import { zaiChat } from '@/lib/zai'
 import type { AppSettings } from '@/lib/settings'
@@ -28,6 +28,14 @@ export async function generateTutorAnswer(
       )
     }
   }
-  const text = await zaiChat(system, prompt)
-  return { text, blocked: false, engine: 'z-ai' }
+  // z-ai ইঞ্জিন শুধু এই স্যান্ডবক্স/সেলফ-হোস্টেড এনভায়রনমেন্টে চলে।
+  // Vercel-এ ক্রেডেনশিয়াল নেই বলে ফেইল করলে ক্র্যাশ না করে পরিষ্কার সিগন্যাল দাও —
+  // chat রুট NO_KEYS → বাংলা গাইড মেসেজ + ক্রেডিট রিফান্ড করে।
+  try {
+    const text = await zaiChat(system, prompt)
+    return { text, blocked: false, engine: 'z-ai' }
+  } catch (e) {
+    console.error('[ai-engine] z-ai fallback failed:', e instanceof Error ? e.message : e)
+    throw new GeminiError(503, keys.length > 0 ? 'ALL_ENGINES_DOWN' : 'NO_KEYS')
+  }
 }

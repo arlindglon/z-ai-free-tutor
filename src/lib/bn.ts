@@ -6,6 +6,7 @@ export function toBn(value: number | string): string {
 }
 
 export const SUBJECTS = [
+  'সাধারণ',
   'গণিত',
   'বিজ্ঞান',
   'পদার্থবিজ্ঞান',

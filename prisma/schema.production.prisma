@@ -1,13 +1,17 @@
-// ⚠️ এটা LOCAL DEV (sandbox) স্কিমা — SQLite।
-// Vercel/TiDB প্রোডাকশন স্কিমা: prisma/schema.production.prisma (mysql) — ওখানে দেখো।
-// মডেল দুটো ফাইলেই হুবহু এক; পার্থক্য শুধু provider + @db.Text।
+// 🚀 প্রোডাকশন স্কিমা — Vercel + TiDB Serverless (free tier)।
+// মডেলগুলো prisma/schema.prisma (SQLite, local dev) এর সাথে হুবহু এক রাখো।
+//
+// Vercel-এ ডিপ্লয়ের সময় (vercel.json buildCommand):
+//   prisma generate  +  prisma db push  — দুটোই এই ফাইল থেকে চলে।
+// Vercel ড্যাশবোর্ডে Environment Variables:
+//   DATABASE_URL = mysql://<user>:<pass>@<host>:4000/<db>?sslaccept=strict
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -50,7 +54,7 @@ model ApiKey {
   key       String   @unique
   label     String?
   active    Boolean  @default(true)
-  lastError String?
+  lastError String?  @db.Text
   createdAt DateTime @default(now())
 }
 
@@ -80,13 +84,13 @@ model Chapter {
   @@index([bookId])
 }
 
-// RAG চাঙ্ক — Gemini embedding ভেক্টর (JSON) DB-তে জমা
+// RAG চাঙ্ক — Gemini embedding ভেক্টর (JSON) TiDB-তে জমা
 model Chunk {
   id        String   @id @default(cuid())
   chapterId String
   chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   idx       Int
-  content   String
+  content   String   @db.Text
   page      Int?
   embedding Json?
   embedded  Boolean  @default(false)
@@ -98,8 +102,8 @@ model Question {
   id         String   @id @default(cuid())
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question   String
-  answer     String?
+  question   String   @db.Text
+  answer     String?  @db.Text
   references Json?
   createdAt  DateTime @default(now())
   @@index([userId, createdAt])

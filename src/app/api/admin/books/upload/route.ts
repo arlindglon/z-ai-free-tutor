@@ -1,142 +1,171 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
-import { extractPdfPages } from '@/lib/pdf'
 import { chunkPages } from '@/lib/chunk'
+import { extractPdfPages } from '@/lib/pdf'
 import { invalidateChunkCache } from '@/lib/rag'
 import { startAutoEmbed } from '@/lib/book-jobs'
 
+// Vercel Fluid compute: Hobby তেও সর্বোচ্চ ৩০০ সেকেন্ড পর্যন্ত ফাংশন চলতে পারে
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
 const MAX_BYTES = 150 * 1024 * 1024 // ১৫০ MB
+const CREATE_BATCH = 500 // বড় বইয়ের চাঙ্ক ব্যাচে ব্যাচে ইনসার্ট
 
-function fail(error: string, code?: string, status = 400) {
-  return NextResponse.json({ ...(code ? { code } : {}), error }, { status })
+async function requireAdmin() {
+  const user = await getSessionUser()
+  if (!user) return { err: unauthorized() }
+  if (user.role !== 'admin') return { err: forbidden() }
+  return { user }
 }
 
 /**
- * সরাসরি PDF আপলোড → বাকি সব অটোমেটিক:
- * টেক্সট বের করা → অধ্যায় চেনা → চাঙ্ক (প্রকৃত পৃষ্ঠা নম্বরসহ) → TiDB-তে সেভ
- * → ব্যাকগ্রাউন্ডে অটো-এমবেড শুরু।
+ * PDF সরাসরি আপলোড → সব অটোমেটিক:
+ * টেক্সট এক্সট্র্যাক্ট → ভিজুয়াল-অর্ডার বাংলা ফিক্স → হেডার/ফুটার পরিষ্কার
+ * → অধ্যায় শনাক্ত → পৃষ্ঠা-সচেতন চাঙ্ক (প্রকৃত পৃষ্ঠা নম্বর) → DB
+ * → রেসপনস পাঠিয়ে দিয়েই ব্যাকগ্রাউন্ডে অটো-এমবেড শুরু (after())
  */
 export async function POST(req: NextRequest) {
-  const user = await getSessionUser()
-  if (!user) return unauthorized()
-  if (user.role !== 'admin') return forbidden()
+  const { err } = await requireAdmin()
+  if (err) return err
 
   let form: FormData
   try {
     form = await req.formData()
   } catch {
-    return fail('ফাইল আপলোড পড়া গেল না — আবার চেষ্টা করো।')
+    return NextResponse.json({ error: 'ফাইল পাঠানো যায়নি — আবার চেষ্টা করো।' }, { status: 400 })
   }
 
   const file = form.get('file')
-  if (!(file instanceof File)) return fail('আগে PDF ফাইল সিলেক্ট করো।')
-  if (file.size === 0) return fail('ফাইলটি খালি।')
-  if (file.size > MAX_BYTES) return fail('ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।')
+  if (!(file instanceof File) || file.size === 0) {
+    return NextResponse.json({ error: 'কোনো PDF ফাইল পাওয়া যায়নি।' }, { status: 400 })
+  }
+  if (file.size > MAX_BYTES) {
+    return NextResponse.json(
+      { error: 'ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।' },
+      { status: 413 }
+    )
+  }
 
   const buf = Buffer.from(await file.arrayBuffer())
-  if (buf.length < 5 || buf.subarray(0, 5).toString('latin1') !== '%PDF-') {
-    return fail('এটা বৈধ PDF ফাইল না — PDF ছাড়া অন্য ফাইল দেওয়া হয়েছে।')
+
+  // PDF ম্যাজিক নম্বর চেক
+  if (buf.length < 5 || buf.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    return NextResponse.json({ error: 'এটা সত্যিকারের PDF ফাইল নয়।' }, { status: 400 })
   }
 
   const subject = String(form.get('subject') ?? '').trim() || 'সাধারণ'
   const board = String(form.get('board') ?? '').trim() || 'NCTB'
-  const fileName = file.name.replace(/\.pdf$/i, '').replace(/_+/g, ' ').trim()
-  const title = String(form.get('title') ?? '').trim() || fileName || 'নামহীন বই'
+  const title =
+    String(form.get('title') ?? '').trim() || file.name.replace(/\.pdf$/i, '').trim() || 'নতুন বই'
 
-  // ১) টেক্সট + অধ্যায় এক্সট্র্যাকশন
+  // ১) টেক্সট এক্সট্র্যাকশন + অধ্যায় শনাক্ত
   let extracted
   try {
     extracted = await extractPdfPages(buf)
-  } catch {
-    return fail(
-      'PDF পড়া গেল না — ফাইলটি করাপ্ট বা পাসওয়ার্ড-প্রোটেক্টেড হতে পারে।',
-      'PDF_BROKEN',
-      422
+  } catch (e) {
+    console.error('[upload] pdf parse failed:', e instanceof Error ? e.message : e)
+    return NextResponse.json(
+      { code: 'PDF_BROKEN', error: 'PDF পড়া গেল না — ফাইলটা নষ্ট বা পাসওয়ার্ড-প্রোটেক্টেড হতে পারে।' },
+      { status: 422 }
     )
   }
 
-  // ২) স্ক্যান করা (ছবির) PDF ধরা পড়ল কি না
   if (extracted.totalChars < 120) {
-    return fail(
-      'এই PDF-এ টেক্সট লেয়ার নেই (সম্ভবত স্ক্যান করা ছবি)। টেক্সট-ভিত্তিক PDF আপলোড করো, অথবা ম্যানুয়াল মোডে OCR করা লেখা পেস্ট করো।',
-      'NEEDS_OCR',
-      422
+    return NextResponse.json(
+      {
+        code: 'NEEDS_OCR',
+        error:
+          'এই PDF-এ কোনো লেখা পাওয়া যায়নি — সম্ভবত এটা স্ক্যান করা ছবি। টেক্সট-ভিত্তিক PDF দাও (NCTB অফিসিয়াল PDF গুলো টেক্সট-ভিত্তিক)।',
+      },
+      { status: 422 }
     )
   }
 
-  // ৩) প্রতিটি অধ্যায় → চাঙ্ক (প্রকৃত পৃষ্ঠা নম্বরসহ)
-  const chapterData = extracted.sections
-    .map((sec) => {
-      const secPages = extracted.pages
-        .filter((p) => p.page >= sec.startPage && p.page < sec.endPage)
-        .map((p) => ({ page: p.page, text: p.text }))
-      const pieces = chunkPages(secPages)
-      return {
-        title: sec.title,
-        number: sec.number,
-        pageStart: sec.startPage,
-        chunks: pieces.map((p) => ({
-          idx: p.idx,
-          content: p.content,
-          page: p.page,
-        })),
-      }
-    })
-    .filter((c) => c.chunks.length > 0)
+  // ২) অধ্যায় অনুযায়ী পৃষ্ঠা-সচেতন চাঙ্ক (রেফারেন্সের পৃষ্ঠা নম্বর নির্ভুল থাকে)
+  type PreparedChapter = {
+    title: string
+    number: number | null
+    pageStart: number
+    chunks: { idx: number; content: string; page: number | null }[]
+  }
+  const prepared: PreparedChapter[] = extracted.sections.map((sec) => ({
+    title: sec.title,
+    number: sec.number,
+    pageStart: sec.startPage,
+    chunks: chunkPages(
+      extracted.pages.filter((p) => p.page >= sec.startPage && p.page < sec.endPage)
+    ),
+  }))
+  const chunkCount = prepared.reduce((a, c) => a + c.chunks.length, 0)
 
-  if (!chapterData.length) {
-    return fail('PDF-এ ব্যবহারযোগ্য লেখা পাওয়া যায়নি।', 'EMPTY_CONTENT', 422)
+  if (!prepared.length || chunkCount === 0) {
+    return NextResponse.json(
+      { error: 'PDF-তে কোনো পড়ার মতো লেখা পাওয়া যায়নি।' },
+      { status: 422 }
+    )
   }
 
-  // ৪) ডেটাবেসে সেভ (bulk insert — বড় বইয়েও দ্রুত)
-  const book = await db.book.create({
-    data: { title, subject, board },
-  })
-
+  // ৩) DB-তে সেভ (ব্যর্থ হলে রোলব্যাক)
+  let bookId: string | null = null
   try {
-    const allChunks: { chapterId: string; idx: number; content: string; page: number | null }[] = []
-    for (const ch of chapterData) {
+    const book = await db.book.create({
+      data: { title: title.slice(0, 120), subject, board },
+    })
+    bookId = book.id
+
+    for (const ch of prepared) {
       const chapter = await db.chapter.create({
-        data: {
-          bookId: book.id,
-          title: ch.title,
-          number: ch.number,
-          pageStart: ch.pageStart,
-        },
+        data: { bookId: book.id, title: ch.title, number: ch.number, pageStart: ch.pageStart },
       })
-      for (const c of ch.chunks) {
-        allChunks.push({ chapterId: chapter.id, idx: c.idx, content: c.content, page: c.page })
+      for (let i = 0; i < ch.chunks.length; i += CREATE_BATCH) {
+        const batch = ch.chunks.slice(i, i + CREATE_BATCH)
+        await db.chunk.createMany({
+          data: batch.map((p) => ({
+            chapterId: chapter.id,
+            idx: p.idx,
+            content: p.content,
+            page: p.page,
+          })),
+        })
       }
     }
-    await db.chunk.createMany({ data: allChunks })
   } catch (e) {
-    // অর্ধেক সেভ হলে অসম্পূর্ণ বই থেকে যাবে না — পরিষ্কার করে দাও
-    await db.book.delete({ where: { id: book.id } }).catch(() => {})
-    console.error('pdf upload db error', e)
-    return fail('ডেটাবেসে সেভ করা গেল না — আবার চেষ্টা করো।', 'DB_ERROR', 500)
+    if (bookId) await db.book.delete({ where: { id: bookId } }).catch(() => {})
+    console.error('[upload] db save failed:', e instanceof Error ? e.message : e)
+    return NextResponse.json(
+      { error: 'বইটা সেভ করা গেল না — আবার চেষ্টা করো।' },
+      { status: 500 }
+    )
   }
 
   invalidateChunkCache()
 
-  // ৫) ব্যাকগ্রাউন্ডে অটো-এমবেড শুরু (রেসপন্সের অপেক্ষা নয়)
-  startAutoEmbed(book.id)
+  // ৪) রেসপনস পাঠানোর পরেই ব্যাকগ্রাউন্ডে অটো-এমবেড শুরু
+  //    (after() = Vercel serverless-এও রেসপনসের পরে কাজ চলতে থাকে)
+  after(async () => {
+    startAutoEmbed(bookId!)
+  })
 
-  const chunkCount = chapterData.reduce((a, c) => a + c.chunks.length, 0)
+  const book = await db.book.findUnique({
+    where: { id: bookId! },
+    include: { chapters: { orderBy: [{ number: 'asc' }, { title: 'asc' }] } },
+  })
+
   return NextResponse.json({
     book: {
-      id: book.id,
-      title: book.title,
-      subject: book.subject,
-      board: book.board,
-      chapters: chapterData.map((c, i) => ({
-        id: `pending-${i}`,
+      id: bookId,
+      title,
+      subject,
+      board,
+      autoEmbedding: true,
+      chapters: (book?.chapters ?? []).map((c) => ({
+        id: c.id,
         title: c.title,
         number: c.number,
-        chunkCount: c.chunks.length,
+        chunkCount: 0,
         embeddedCount: 0,
       })),
     },

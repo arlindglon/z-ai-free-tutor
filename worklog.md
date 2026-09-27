@@ -125,3 +125,25 @@ Stage Summary:
 - Bengali visual-order PDFs handled best-effort; clean logical-order PDFs (NCTB-style) extract near-perfect
 - Geo-block note unchanged: embeddings need US/EU deployment; chat never blocked (z-ai + TF-IDF fallback)
 - Default subject for PDF upload = সাধারণ (or admin-chosen); board default NCTB
+
+---
+Task ID: 6
+Agent: main (Z.ai Code)
+Task: Vercel deploy readiness + sandbox-reset recovery (DB + upload route)
+
+Work Log:
+- User asked: "ami ki ata vercel a deploy korte parbo?"
+- DISCOVERY: sandbox had been RESET since last session — .env lost TiDB DATABASE_URL (replaced by sqlite file:), ADMIN_EMAIL/PASSWORD gone, and src/app/api/admin/books/upload/route.ts file was missing (frontend books-tab.tsx still called it → 404). lib files (pdf.ts/book-jobs.ts/chunkPages) survived.
+- DB was broken (mysql schema + file: sqlite URL → Prisma error on every query). Fixed via dual schema:
+  - prisma/schema.prisma → SQLite (local/sandbox default, @db.Text removed)
+  - prisma/schema.production.prisma → MySQL/TiDB (Vercel; identical models)
+  - regenerated client + db:push on sqlite; .env += ADMIN_EMAIL/ADMIN_PASSWORD (admin@tutor.bd/admin1234)
+- Recreated POST /api/admin/books/upload (150MB cap, %PDF magic, NEEDS_OCR/PDF_BROKEN, page-aware chunkPages per auto-detected section, batched createMany 500, rollback, invalidateChunkCache) — now uses next/server after() so background auto-embed survives the response AND works on Vercel serverless (maxDuration=300, runtime nodejs).
+- Vercel readiness: vercel.json (buildCommand = prisma generate + prisma db push + next build against schema.production.prisma; functions maxDuration 300), /api/admin/embed maxDuration=300, ai-engine.ts wraps z-ai fallback failure → clean GeminiError NO_KEYS/ALL_ENGINES_DOWN (no crash on Vercel where z-ai creds don't exist), bn.ts SUBJECTS += 'সাধারণ' (default PDF subject now filterable).
+- E2E verified (agent-browser + curl): admin login → PDF upload UI (150MB text, সাধারণ default) → 5-page Bengali chromium-printed test PDF → upload 200 in 503ms → success alert "৫ পৃষ্ঠা থেকে ৫টি চাঙ্ক" → 3 chapters auto-detected (গতি=1, কোষ ও কোষ বিভাজন=2, আলো=3; minor glyph mangling is a chromium-font artifact, real NCTB PDFs extract clean) → auto-embed after() job started and stopped gracefully NO_KEYS (geo-blocked sandbox, by design) → chat "ভরবেগ কী?" via z-ai engine + TF-IDF lexical fallback returned reference {book: biggan-test, chapter: গতি, page: 2} — real page number from PDF.
+- tsc clean (src), eslint clean, dev.log clean.
+
+Stage Summary:
+- App fully functional again locally + Vercel-ready out of the box (dual schema, after() job, vercel.json, graceful fallbacks).
+- Known Vercel constraint to communicate: serverless request body limit ~4.5MB on Hobby/Pro → 150MB direct upload works on VPS/Railway/Render/self-host but NOT on Vercel; options = Vercel Blob direct upload or browser-side extraction (offered to implement).
+- On Vercel (US/EU egress) Gemini geo-block disappears → real vector embeddings + Gemini answers come alive; z-ai fallback stays sandbox-only.

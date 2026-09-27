@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "prisma generate --schema prisma/schema.production.prisma && prisma db push --schema prisma/schema.production.prisma --accept-data-loss && next build",
+  "functions": {
+    "src/app/api/**/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

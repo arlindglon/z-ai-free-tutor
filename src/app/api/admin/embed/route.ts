@@ -6,6 +6,10 @@ import { embedTexts } from '@/lib/gemini'
 import { invalidateChunkCache } from '@/lib/rag'
 import { GeminiError } from '@/lib/keypool'
 
+// বড় বইয়ে এক রান (১০০ চাঙ্ক × রেট-লিমিট বিরতি) কয়েক মিনিট লাগতে পারে
+export const runtime = 'nodejs'
+export const maxDuration = 300
+
 /**
  * এমবেডিং জেনারেটর:
  * এখনো এমবেড হয়নি এমন চাঙ্ক (এক রানে সর্বোচ্চ ১০০) ব্যাচে ব্যাচে
