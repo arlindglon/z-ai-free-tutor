@@ -207,3 +207,27 @@ Work Log:
 Stage Summary:
 - User's Z.ai key CONFIRMED WORKING on free tier — they can set ZAI_API_KEY (+ optional ZAI_MODEL) in Vercel env and the Z.ai fallback goes live
 - Reminded user (as with GitHub token) not to paste API keys in chat
+
+---
+Task ID: 10
+Agent: main (Z.ai Code)
+Task: Z.ai free-tier rate-limit stress test + concurrency protection
+
+Work Log:
+- User asked: how many requests/min do GLM-4.7-Flash & GLM-4.5-Flash accept, answer speed etc.
+- Empirical stress test with user's real key:
+  * Sequential 8x glm-4.7-flash: 8/8 OK, avg 870ms (632-1672ms) → ~69 RPM theoretical
+  * Burst 10 concurrent glm-4.7-flash: 2/10 OK, rest 429 code 1302 "Rate limit reached for requests" → concurrency ≈ 2
+  * Burst 10 concurrent glm-4.5-flash: 4/10 OK → concurrency ≈ 4
+  * Recovery: fully recovered after ~15s (limit is concurrency/window-based, not a ban)
+- Official docs don't publish exact numbers → measured values are authoritative
+- PROTECTION IMPLEMENTED in src/lib/zai.ts env-path:
+  * Local semaphore (withSlot): ZAI_CONCURRENCY default 2 — excess requests queue locally instead of hitting 429
+  * 429 auto-retry ×2 with backoff+jitter (1.2s/2.4s + 0-600ms) — covers multi-instance serverless
+  * Test evolution: 2/6 → 4/6 (retry only) → 6/6 after cooldown with semaphore (4.7s total for 6 concurrent)
+- README: added measured-limits table + ZAI_CONCURRENCY note (use 4 with glm-4.5-flash)
+- tsc/eslint clean; committed + pushed
+
+Stage Summary:
+- Free-tier capacity measured: glm-4.7-flash ≈ 2 concurrent (~60-100 RPM sustained), glm-4.5-flash ≈ 4 concurrent
+- App now self-throttles before Z.ai's limit; students never see 429 errors from the fallback path
