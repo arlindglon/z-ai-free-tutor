@@ -112,6 +112,8 @@ ADMIN_PASSWORD=admin1234
 | `DATABASE_URL` | ডেটাবেস connection | `file:./db/custom.db` বা TiDB MySQL URL |
 | `ADMIN_EMAIL` | অ্যাডমিন লগইন ইমেইল | `admin@tutor.bd` |
 | `ADMIN_PASSWORD` | অ্যাডমিন পাসওয়ার্ড | `admin1234` (বদলাও!) |
+| `ZAI_API_KEY` | ঐচ্ছিক — Vercel-এ z-ai ফলব্যাক চালু | নিজের Z.ai key ([z.ai](https://z.ai) Model API) |
+| `ZAI_MODEL` | ঐচ্ছিক — Z.ai fallback মডেল | `glm-4.5-flash` (ডিফল্ট) |
 
 > 💡 **Gemini API keys কোথায়?** `.env`-এ না! অ্যাডমিন প্যানেলের **"API Keys" ট্যাব** থেকে অ্যাড করতে হয় — DB-তে এনক্রিপ্টেড নয় কিন্তু শুধু অ্যাডমিন দেখতে পারে (masked)।
 
@@ -270,6 +272,23 @@ next build
 ### 🌍 Vercel ডিপ্লয়ের সবচেয়ে বড় সুবিধা
 
 Vercel সার্ভার **US/EU-তে** থাকে → sandbox-এর জিও-ব্লক সমস্যা চলে যায় → **আসল Gemini embedding + আসল ভেক্টর RAG** কাজ করবে (লোকালে TF-IDF ফলব্যাক চলছিল)।
+
+### ঐচ্ছিক ধাপ ৭ — Vercel-এ z-ai ফলব্যাকও চালু করো (নিজের ফ্রি Z.ai key)
+
+স্যান্ডবক্সের z-ai credential Vercel-এ কাজ করে না — **কিন্তু নিজের Z.ai API key নিলে fallback ইঞ্জিন Vercel-এও চলবে!**
+
+1. [z.ai](https://z.ai) → **Model API** → Sign Up → **API Keys** থেকে নিজের key নাও (GLM Flash মডেলগুলোর **ফ্রি টিয়ার** আছে)
+2. Vercel → Settings → Environment Variables-এ যোগ করো:
+
+| Name | Value | নোট |
+|---|---|---|
+| `ZAI_API_KEY` | তোমার Z.ai key | fallback চালু হবে |
+| `ZAI_MODEL` | `glm-4.5-flash` | ঐচ্ছিক — Z.ai ড্যাশবোর্ডে যে ফ্রি Flash মডেল আছে সেটা দাও |
+| `ZAI_BASE_URL` | `https://api.z.ai/api/paas/v4` | ঐচ্ছিক — ডিফল্ট এটাই |
+
+3. এবার ইঞ্জিন চেইন: **Gemini key pool → Z.ai ফলব্যাক** — Gemini-র সব key মরে গেলেও শিক্ষার্থী উত্তর পাবে!
+
+> ⚠️ মনে রাখো: স্যান্ডবক্সের ভেতরের `.z-ai-config` credential কপি করে Vercel-এ দেওয়া যাবে না — ওটা এই প্ল্যাটফর্মের অভ্যন্তরীণ। নিজের key-ই সঠিক পথ।
 
 ---
 
