@@ -98,3 +98,30 @@ Stage Summary:
 - FULL SYSTEM WORKING E2E in browser verification
 - Gemini key-pool = production path (US/EU deploy); z-ai + lexical = sandbox/anywhere fallback — students NEVER blocked
 - Admin creds: admin@tutor.bd / admin1234 (from env)
+
+---
+Task ID: 5
+Agent: main (Z.ai Code)
+Task: Direct PDF upload from admin panel — "upload korlam, baki sob automatically holo"
+
+Work Log:
+- User request: admin panel থেকে সরাসরি PDF আপলোড → টেক্সট এক্সট্র্যাক্ট → অধ্যায় চেনা → চাঙ্ক → এমবেড → DB, সব অটোমেটিক। Also raised size limit 30MB→150MB per user request.
+- Installed: unpdf (pdf.js text extraction), pdf-lib + @pdf-lib/fontkit + regenerator-runtime (test-PDF generation only)
+- next.config.ts: serverExternalPackages ["unpdf"]
+- src/lib/chunk.ts: added chunkPages() — page-aware sentence chunking (দাঁড়ি/বিরাম boundaries), target ~850 chars, closes chunks at page boundaries → real page numbers on every chunk
+- src/lib/pdf.ts (new): extractPdfPages() — per-page text, Bengali visual-order fix (ি/ে/ৈ pre-base reorder "গিত"→"গতি", ো/ৌ rejoin), NUL/control-char cleanup (যুক্তবর্ণ glyphs extract as \u0000!), halant-gap space removal (newline-safe), header/footer de-dup (lines on ≥60% pages dropped), page-number-line drop, mangle-proof chapter detection (squashed-line prefix match on অধ্যায়/অধায়/অধযায়/পাঠ/ইউনিট/chapter/unit variants + TOC-line rejection via trailing digits) → sections [{title, number, startPage, endPage}]; fallback = single "সম্পূর্ণ বই" section
+- src/lib/book-jobs.ts (new): background auto-embed job — fire-and-forget loop (take 100, batch 20, 300ms pause), round-robin keypool failover, stops silently on NO_KEYS/GEO_BLOCKED/KEY_POOL_EXHAUSTED (partial progress saved), invalidateChunkCache on finish; isAutoEmbedding() exposed
+- POST /api/admin/books/upload (new, runtime nodejs): multipart FormData; validations (%PDF magic, 150MB cap, NEEDS_OCR detection when totalChars<120, PDF_BROKEN, EMPTY_CONTENT); bulk insert via createMany (fast for big books); rollback book on failure; responds {book, pageCount, chunkCount, autoEmbed:true} then startAutoEmbed(bookId)
+- GET /api/admin/books: + autoEmbedding flag per book; types.ts BookInfo.autoEmbedding?
+- books-tab.tsx rewritten: mode toggle (PDF আপলোড default / ম্যানুয়াল লেখা), drag-drop zone + hidden file input + file chip (name/size), optional subject/board, 150MB client validation, processing states ("বই পড়া হচ্ছে…"), success alert with page/chunk counts, 4s polling while any book.autoEmbedding, live "স্বয়ংক্রিয় এমবেড হচ্ছে…" badge, embed button disabled during auto-embed; manual form unchanged
+- Debugged dev-server restart env leak: stale shell DATABASE_URL (sqlite) overrode .env TiDB → restarted with `env -u DATABASE_URL`
+- Test assets: Noto Sans Bengali fonts installed (~/.local/share/fonts), test book PDF generated via chromium print-to-pdf (mangled case) AND pdf-lib (clean logical case) at /home/z/tmp-tutor/
+- Verified: 5-page PDF → 3 chapters auto-detected (গতি/কোষ ও কোষ বিভাজন/আলো) → 8 chunks with real page numbers → auto-embed job ran (stopped GEO_BLOCKED as designed in HK-egress sandbox) → chat Q&A returns references from uploaded PDF (biggan-book/গতি/পৃষ্ঠা ১) via lexical fallback
+- Agent-browser E2E: login → PDF mode UI → UI file upload → "প্রসেস হচ্ছে..." → success alert "৫ পৃষ্ঠা থেকে ৮টি চাঙ্ক" → 3 book cards persisted after re-login → mobile 375px no overflow → zero console errors
+
+Stage Summary:
+- FEATURE COMPLETE: admin uploads PDF → everything else automatic (extract→chapters→chunks w/ real pages→TiDB save→background auto-embed)
+- Size limit now 150MB (both ends)
+- Bengali visual-order PDFs handled best-effort; clean logical-order PDFs (NCTB-style) extract near-perfect
+- Geo-block note unchanged: embeddings need US/EU deployment; chat never blocked (z-ai + TF-IDF fallback)
+- Default subject for PDF upload = সাধারণ (or admin-chosen); board default NCTB

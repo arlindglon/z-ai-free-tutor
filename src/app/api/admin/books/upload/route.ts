@@ -9,7 +9,7 @@ import { startAutoEmbed } from '@/lib/book-jobs'
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
-const MAX_BYTES = 30 * 1024 * 1024 // ৩০ MB
+const MAX_BYTES = 150 * 1024 * 1024 // ১৫০ MB
 
 function fail(error: string, code?: string, status = 400) {
   return NextResponse.json({ ...(code ? { code } : {}), error }, { status })
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   const file = form.get('file')
   if (!(file instanceof File)) return fail('আগে PDF ফাইল সিলেক্ট করো।')
   if (file.size === 0) return fail('ফাইলটি খালি।')
-  if (file.size > MAX_BYTES) return fail('ফাইল খুব বড় — সর্বোচ্চ ৩০ MB আপলোড করা যাবে।')
+  if (file.size > MAX_BYTES) return fail('ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।')
 
   const buf = Buffer.from(await file.arrayBuffer())
   if (buf.length < 5 || buf.subarray(0, 5).toString('latin1') !== '%PDF-') {

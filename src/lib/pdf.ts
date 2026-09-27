@@ -2,8 +2,9 @@
  * PDF → টেক্সট পাইপলাইন (সম্পূর্ণ অটোমেটিক)
  * অ্যাডমিন শুধু PDF আপলোড করবে — এখানে স্বয়ংক্রিয়ভাবে:
  *  ১) পৃষ্ঠা-ভিত্তিক টেক্সট বের করা (unpdf / pdf.js)
- *  ২) হেডার-ফুটার ও পৃষ্ঠা-নম্বরের লাইন পরিষ্কার করা
- *  ৩) "অধ্যায় / পাঠ / Chapter" শিরোনাম চিনে অধ্যায়ে ভাগ করা
+ *  ২) বাংলা ভিজুয়াল-অর্ডার সংশোধন (গিত → গতি)
+ *  ৩) হেডার-ফুটার ও পৃষ্ঠা-নম্বরের লাইন পরিষ্কার করা
+ *  ৪) "অধ্যায় / পাঠ / Chapter" শিরোনাম চিনে অধ্যায়ে ভাগ করা
  */
 import { extractText, getDocumentProxy } from 'unpdf'
 
@@ -35,6 +36,38 @@ function bnToNumber(s: string): number {
     n = n * 10 + d
   }
   return n
+}
+
+/**
+ * বাংলা প্রি-বেস স্বরচিহ্ন (ি ে ৈ) ভিজুয়াল-অর্ডার সংশোধন:
+ * "গিত" → "গতি", "েদখা" → "দেখা"
+ * শুধুমাত্র ভিজুয়াল-অর্ডার PDF-তে প্রয়োগ হয় (নিচের ডিটেক্টর দেখো)
+ */
+const PRE_BASE_RE =
+  /([\u09BF\u09C7\u09C8])([\u0995-\u09B9\u09CE](?:\u09CD[\u0995-\u09B9\u09CE])*)/g
+
+/** হসন্তের পরে ঢুকে যাওয়া ফাঁক মুছে ফেলা (যুক্তবর্ণ ভাঙার আর্টিফ্যাক্ট) — নিউলাইন নয়! */
+const HALANT_GAP_RE = /\u09CD[ \t\u00A0]+(?=[\u0995-\u09B9\u09CE])/g
+
+/**
+ * ভিজুয়াল-অর্ডার ম্যাংলিং শনাক্তকারী:
+ * সঠিক (লজিক্যাল) বাংলায় ি/ে/ৈ কখনো শব্দের শুরুতে আসতে পারে না।
+ * টোকেন-শুরুতে এই চিহ্ন দেখা গেলেই বোঝা যায় টেক্সট ভিজুয়াল-অর্ডারে উল্টো।
+ */
+function isVisualOrderBengali(text: string): boolean {
+  const hits = text.match(/(^|[\s\u00A0।,!?;:"'(\-–—])[িেৈ]/gm)
+  return (hits?.length ?? 0) >= 2
+}
+
+function fixBengaliExtraction(text: string, visualOrder: boolean): string {
+  let t = text.replace(/[\u0000-\u0008\u200B-\u200D\uFEFF]/g, '')
+  if (visualOrder) {
+    t = t.replace(PRE_BASE_RE, '$2$1')
+    // ো/ৌ ভাঙা অংশ (ে+া / ে+ূ) আবার জোড়া দাও
+    t = t.replace(/\u09C7\u09BE/g, '\u09CB').replace(/\u09C7\u09C2/g, '\u09CC')
+  }
+  t = t.replace(HALANT_GAP_RE, '\u09CD')
+  return t
 }
 
 /** এক লাইন কি শুধু পৃষ্ঠা-নম্বর? (যেমন: "৪৫", "12", "- 13 -") */
@@ -74,9 +107,52 @@ function stripRepeatingLines(pages: string[][]): string[][] {
   return pages.map((lines) => lines.filter((l) => !repeated.has(l.toLowerCase())))
 }
 
-/** অধ্যায় শিরোনাম চেনার প্যাটার্ন */
-const CHAPTER_RE =
-  /^\s*(?:অধ্যায়|অনুচ্ছেদ|পাঠ|ইউনিট|chapter|CHAPTER|Chapter|unit|UNIT|Unit)\s*[-–—:.]?\s*([০-৯0-9]+)?\s*[-–—:.)]?\s*(.*)$/i
+/**
+ * অধ্যায় শিরোনাম চেনা — ম্যাংগল-প্রুফ:
+ * শব্দের ভিতরের ফাঁক স্কোয়াশ করে ম্যাচ করাই, তাই "অধ ায় ১"-জাতীয়
+ * ভাঙা এক্সট্র্যাকশনেও ধরা পড়ে।
+ */
+const CHAPTER_KEYWORDS = [
+  'অধ্যায়',
+  'অধায়', // ্য হারিয়ে গেলে
+  'অধযায়', // ্ হারিয়ে গেলে
+  'অনুচ্ছেদ',
+  'অনচ্ছেদ',
+  'পাঠ',
+  'ইউনিট',
+  'chapter',
+  'unit',
+] as const
+
+function matchChapterLine(line: string): { number: number | null; title: string } | null {
+  const trimmed = line.trim()
+  if (trimmed.length > 90) return null
+  const squashed = trimmed.replace(/[\s\u0000-\u001F]+/g, '')
+  if (!squashed) return null
+  const lower = squashed.toLowerCase()
+  const hit = CHAPTER_KEYWORDS.find((kw) => lower.startsWith(kw))
+  if (!hit) return null
+
+  // নম্বর ও শিরোনাম মূল (স্কোয়াশ না-করা) লাইন থেকে নেই — স্পেস টিকে থাকে
+  const digitRun = /[০-৯0-9]+/.exec(trimmed)
+  if (digitRun) {
+    const number = bnToNumber(digitRun[0])
+    let title = trimmed
+      .slice(digitRun.index + digitRun[0].length)
+      .replace(/^[\s]*[-–—:.)][\s]*/, '')
+      .replace(/[-–—:.।\u09CD\s]+$/g, '')
+      .trim()
+    if (/[.·\-–—]*[০-৯0-9]{1,4}$/.test(title)) return null // TOC লাইন
+    if (!title) title = `অধ্যায় ${number}`
+    return { number, title: title.slice(0, 80) }
+  }
+
+  // নম্বরহীন হেডিং — প্রথম শব্দ (কীওয়ার্ড) বাদে বাকিটা শিরোনাম
+  let title = trimmed.replace(/^\S+/, '').replace(/^[-–—:.)\s]+/, '').replace(/[-–—:.।\u09CD\s]+$/g, '').trim()
+  if (/[.·\-–—]*[০-৯0-9]{1,4}$/.test(title)) return null
+  if (!title) return null
+  return { number: null, title: title.slice(0, 80) }
+}
 
 type Boundary = { pageIndex: number; lineIndex: number; number: number | null; title: string }
 
@@ -84,29 +160,18 @@ function detectBoundaries(pages: string[][]): Boundary[] {
   const found: Boundary[] = []
   pages.forEach((lines, pi) => {
     lines.forEach((line, li) => {
-      if (line.length > 90) return
-      const m = CHAPTER_RE.exec(line)
-      if (!m) return
-      const number = m[1] ? bnToNumber(m[1]) : NaN
-      let title = (m[2] ?? '').replace(/[।.:\s]+$/, '').trim()
-      // শিরোনামের শেষে পৃষ্ঠা-নম্বর থাকলে এটা সূচিপত্রের লাইন (TOC) — বাদ
-      if (/[\s.·\-–—]*[০-৯0-9]{1,4}$/.test(title)) return
-      // খুব লম্বা "শিরোনাম" আসলে সাধারণ বাক্য
-      if (title.split(/\s+/).length > 12) return
-      // পাতার শুরুর দিকে না হলে/লাইন ছোট না হলে আসল শিরোনাম না
-      if (li > 6 && line.length > 70) return
-      if (!Number.isFinite(number)) {
-        return found.push({ pageIndex: pi, lineIndex: li, number: null, title })
-      }
+      const hit = matchChapterLine(line)
+      if (!hit) return
+      if (li > 6 && line.length > 70) return // পাতার একেবারে মাঝের সাধারণ বাক্য নয়
       if (found.length) {
         const prev = found[found.length - 1]
         // পরপর দুই লাইনে ভাঙা শিরোনাম — আগেরটার সাথে জুড়ে দাও
-        if (prev.pageIndex === pi && li - prev.lineIndex <= 2 && prev.number === number) {
-          if (title && !prev.title) prev.title = title
+        if (prev.pageIndex === pi && li - prev.lineIndex <= 2 && prev.number === hit.number) {
+          if (hit.title && !prev.title) prev.title = hit.title
           return
         }
       }
-      found.push({ pageIndex: pi, lineIndex: li, number, title })
+      found.push({ pageIndex: pi, lineIndex: li, number: hit.number, title: hit.title })
     })
   })
 
@@ -141,8 +206,13 @@ export async function extractPdfPages(buf: Buffer): Promise<PdfExtractResult> {
   const { totalPages, text } = await extractText(pdf, { mergePages: false })
   const rawPages: string[] = Array.isArray(text) ? text : [String(text)]
 
-  // পরিষ্কার করা লাইন (পৃষ্ঠা-নম্বর বাদ) → রিপিটিং হেডার/ফুটার বাদ
-  const cleaned = stripRepeatingLines(rawPages.map((t) => cleanLines(t ?? '')))
+  // পুরো ডকুমেন্টে একবার: ভিজুয়াল-অর্ডার বাংলা কি না
+  const visualOrder = isVisualOrderBengali(rawPages.join('\n'))
+
+  // সংশোধন → লাইন পরিষ্কার (পৃষ্ঠা-নম্বর বাদ) → রিপিটিং হেডার/ফুটার বাদ
+  const cleaned = stripRepeatingLines(
+    rawPages.map((t) => cleanLines(fixBengaliExtraction(t ?? '', visualOrder)))
+  )
 
   const pages = cleaned.map((lines, i) => ({
     page: i + 1,

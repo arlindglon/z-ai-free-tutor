@@ -41,7 +41,7 @@ type UploadResult = {
   autoEmbed: boolean
 }
 
-const MAX_PDF_BYTES = 30 * 1024 * 1024
+const MAX_PDF_BYTES = 150 * 1024 * 1024
 
 function formatSize(bytes: number): string {
   const mb = bytes / (1024 * 1024)
@@ -130,7 +130,7 @@ export function BooksTab() {
       return
     }
     if (f.size > MAX_PDF_BYTES) {
-      setUploadError('ফাইল খুব বড় — সর্বোচ্চ ৩০ MB আপলোড করা যাবে।')
+      setUploadError('ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।')
       return
     }
     setFile(f)
@@ -436,7 +436,7 @@ export function BooksTab() {
                   <p className="text-sm font-semibold text-emerald-800">
                     PDF ফাইল এখানে টেনে আনো, অথবা ক্লিক করে বাছো
                   </p>
-                  <p className="text-xs text-stone-500">সর্বোচ্চ ৩০ MB — টেক্সট-ভিত্তিক PDF (স্ক্যান করা ছবি নয়)</p>
+                  <p className="text-xs text-stone-500">সর্বোচ্চ ১৫০ MB — টেক্সট-ভিত্তিক PDF (স্ক্যান করা ছবি নয়)</p>
                 </>
               )}
             </div>
