@@ -26,6 +26,26 @@ const ENV_BASE_URL =
 
 const envConfigured = ENV_API_KEY.length > 0
 
+// ফ্রি টিয়ারে concurrency লিমিট (~২ একসাথে, 429 code 1302) →
+// লোকাল সেমাফোর: লিমিটের বেশি request লাইনে অপেক্ষা করে, 429 আসেই না।
+// সার্ভারলেসে একাধিক instance থাকলে এটা per-instance — বাকি থাকলে নিচের retry ধরে।
+const ENV_CONCURRENCY = Math.max(1, Number(process.env.ZAI_CONCURRENCY ?? '2') || 2)
+let active = 0
+const waiters: Array<() => void> = []
+
+async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (active >= ENV_CONCURRENCY) {
+    await new Promise<void>((resolve) => waiters.push(resolve))
+  }
+  active++
+  try {
+    return await fn()
+  } finally {
+    active--
+    waiters.shift()?.()
+  }
+}
+
 interface ChatChoice {
   message?: { content?: string | null }
 }
@@ -34,7 +54,8 @@ interface OpenAiLikeResponse {
 }
 
 // ১) নিজের Z.ai key দিয়ে পাবলিক প্ল্যাটফর্ম — OpenAI-compatible এন্ডপয়েন্ট
-async function envChat(system: string, prompt: string): Promise<string> {
+// ফ্রি টিয়ারে concurrency লিমিট আছে (429 code 1302) → ছোট backoff দিয়ে অটো-রিট্রাই
+async function envChatOnce(system: string, prompt: string): Promise<string> {
   const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -58,6 +79,24 @@ async function envChat(system: string, prompt: string): Promise<string> {
   const text = data.choices?.[0]?.message?.content ?? ''
   if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')
   return text
+}
+
+async function envChat(system: string, prompt: string): Promise<string> {
+  const RETRIES = 2
+  const BACKOFFS = [1200, 2400] // 429 হলে ছোট অপেক্ষা + jitter দিয়ে আবার
+  return withSlot(async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await envChatOnce(system, prompt)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
+        if (!isRateLimit || attempt >= RETRIES) throw e
+        const base = BACKOFFS[attempt] ?? 2400
+        await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * 600)))
+      }
+    }
+  })
 }
 
 // ২) স্যান্ডবক্স SDK পথ (.z-ai-config ফাইল থেকে credential)
