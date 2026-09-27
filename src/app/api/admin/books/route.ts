@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
 import { chunkContent, estimatePage } from '@/lib/chunk'
 import { invalidateChunkCache } from '@/lib/rag'
+import { isAutoEmbedding } from '@/lib/book-jobs'
 
 async function requireAdmin() {
   const user = await getSessionUser()
@@ -44,6 +45,7 @@ export async function GET() {
       title: b.title,
       subject: b.subject,
       board: b.board,
+      autoEmbedding: isAutoEmbedding(b.id),
       chapters: b.chapters.map((c) => ({
         id: c.id,
         title: c.title,

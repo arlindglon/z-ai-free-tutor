@@ -59,3 +59,63 @@ export function estimatePage(offsetChars: number, pageStart: number | null): num
   if (!pageStart || pageStart < 1) return null
   return pageStart + Math.floor(offsetChars / 1500)
 }
+
+export type PagePiece = { idx: number; content: string; page: number | null }
+
+/** বাক্য বিভাজক — বাংলা দাঁড়ি (।/॥) ও ইংরেজি বিরামচিহ্ন */
+function splitSentences(text: string, max = 1150): string[] {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if (!flat) return []
+  const parts = flat
+    .split(/(?<=[।॥.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  // খুব লম্বা বাক্য (টেবিল/সূচি) হলে অক্ষরে ভাগ
+  const out: string[] = []
+  for (const p of parts) {
+    if (p.length <= max) {
+      out.push(p)
+      continue
+    }
+    for (let i = 0; i < p.length; i += max) out.push(p.slice(i, i + max))
+  }
+  return out
+}
+
+/**
+ * PDF-এর পৃষ্ঠা-ভিত্তিক টেক্সট → চাঙ্ক (প্রকৃত পৃষ্ঠা নম্বরসহ!)
+ * বাক্য-সীমায় ভাগ, পৃষ্ঠা শেষে চাঙ্ক যথেষ্ট বড় হলে সেখানেই বন্ধ —
+ * ফলে রেফারেন্সের পৃষ্ঠা নম্বর প্রায় নির্ভুল থাকে।
+ */
+export function chunkPages(
+  pagesText: { page: number; text: string }[],
+  target = 850
+): PagePiece[] {
+  const chunks: PagePiece[] = []
+  let cur = ''
+  let curPage: number | null = null
+
+  const close = () => {
+    const content = cur.trim()
+    if (content) chunks.push({ idx: chunks.length, content, page: curPage })
+    cur = ''
+    curPage = null
+  }
+
+  for (const { page, text } of pagesText) {
+    for (const s of splitSentences(text)) {
+      if (!cur) curPage = page
+      else if (cur.length + s.length + 1 > target) {
+        close()
+        curPage = page
+      }
+      cur = cur ? `${cur} ${s}` : s
+      if (cur.length >= target * 1.35) close()
+    }
+    // পৃষ্ঠা-সীমায় ভাগ — রেফারেন্স নির্ভুল রাখতে
+    if (cur.length >= 380) close()
+  }
+  close()
+  return chunks
+}

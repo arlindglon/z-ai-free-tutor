@@ -58,6 +58,8 @@ export type BookInfo = {
   title: string
   subject: string
   board: string | null
+  /** ব্যাকগ্রাউন্ডে অটো-এমবেড চলছে কি না (PDF আপলোডের পরে) */
+  autoEmbedding?: boolean
   chapters: ChapterInfo[]
 }
 
