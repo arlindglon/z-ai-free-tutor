@@ -147,3 +147,24 @@ Stage Summary:
 - App fully functional again locally + Vercel-ready out of the box (dual schema, after() job, vercel.json, graceful fallbacks).
 - Known Vercel constraint to communicate: serverless request body limit ~4.5MB on Hobby/Pro → 150MB direct upload works on VPS/Railway/Render/self-host but NOT on Vercel; options = Vercel Blob direct upload or browser-side extraction (offered to implement).
 - On Vercel (US/EU egress) Gemini geo-block disappears → real vector embeddings + Gemini answers come alive; z-ai fallback stays sandbox-only.
+
+---
+Task ID: 7
+Agent: main (Z.ai Code)
+Task: Full guide README + user's GitHub token setup + TiDB production DB provisioning
+
+Work Log:
+- User (new user) asked for all guides in a README; provided GitHub token (arlindglon) + TiDB connection string (gateway01.ap-southeast-1, db "resturant")
+- Updated git remote URL with fresh token; verified push access (repo arlindglon/z-ai-free-tutor, PRIVATE)
+- Tested TiDB ap-southeast-1: TCP open, mysql2 direct connect OK (v8.5.3-serverless). Prisma first attempt gave transient "server not running" — direct mysql2 worked
+- DISCOVERY: "resturant" DB contains ANOTHER project's tables (orders, menu_items, settings, ...) — pushing tutor schema there would collide (both have Setting). Created NEW database `tutor` in same cluster instead
+- Pushed prisma/schema.production.prisma to TiDB `tutor` DB → all 9 tables created (User, Session, DailyCredit, ApiKey, Setting, Book, Chapter, Chunk, Question) — verified via SHOW TABLES
+- Wrote comprehensive Bengali README.md (349 lines): features, data flow, local setup, .env guide, TiDB dual-schema guide, admin panel guide (keys/knowledge/stats/settings), PDF upload workflow + limits, step-by-step Vercel deploy (import → env vars DATABASE_URL/ADMIN_EMAIL/ADMIN_PASSWORD → deploy → add keys/books), Vercel limitations table (4.5MB body cap, Hobby 60s timeout, background embed job), decision guide (small PDF→Vercel, 30-150MB→Railway/Render/VPS), troubleshooting table (DEVICE_EXISTS, NO_CREDITS, GEO_BLOCKED, NEEDS_OCR...), security notes (revoke leaked tokens, never commit .env)
+- README contains NO secrets (placeholders for TiDB user/pass; repo is private anyway)
+- git commit + push: 4 commits landed on origin/main (84eb3a0..dd405b3)
+- eslint clean; dev server healthy
+
+Stage Summary:
+- User can now deploy to Vercel by: vercel.com → Sign Up with GitHub → Import repo → set 3 env vars (DATABASE_URL=mysql://...@gateway01.ap-southeast-1...:4000/tutor?sslaccept=strict, ADMIN_EMAIL, ADMIN_PASSWORD) → Deploy
+- TiDB production DB `tutor` pre-provisioned on user's own cluster; Vercel build auto-runs prisma db push so tables will also self-heal
+- Security warning delivered: user pasted GitHub token in chat — must revoke at github.com/settings/tokens after setup
