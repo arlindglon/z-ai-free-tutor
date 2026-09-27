@@ -1,0 +1,26 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
+import { getSettings, putSettings } from '@/lib/settings'
+
+/** সিস্টেম সেটিংস — মডেল নাম, দৈনিক কোটা */
+export async function GET() {
+  const user = await getSessionUser()
+  if (!user) return unauthorized()
+  if (user.role !== 'admin') return forbidden()
+  const settings = await getSettings()
+  return NextResponse.json({ settings })
+}
+
+export async function PUT(req: NextRequest) {
+  const user = await getSessionUser()
+  if (!user) return unauthorized()
+  if (user.role !== 'admin') return forbidden()
+
+  const body = await req.json().catch(() => ({}))
+  const settings = await putSettings({
+    chatModel: body.chatModel !== undefined ? String(body.chatModel) : undefined,
+    embeddingModel: body.embeddingModel !== undefined ? String(body.embeddingModel) : undefined,
+    dailyCredits: body.dailyCredits !== undefined ? Number(body.dailyCredits) : undefined,
+  })
+  return NextResponse.json({ settings })
+}

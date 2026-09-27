@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// শিক্ষার্থী + অ্যাডমিন — এক ডিভাইসে একটাই ফ্রি একাউন্ট (deviceHash unique)
+model User {
+  id           String        @id @default(cuid())
+  name         String
+  email        String        @unique
+  passwordHash String
+  role         String        @default("student") // student | admin
+  deviceHash   String?       @unique
+  createdAt    DateTime      @default(now())
+  sessions     Session[]
+  questions    Question[]
+  credits      DailyCredit[]
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+}
+
+// দৈনিক ৩০ ক্রেডিট — তারিখ অনুযায়ী (Asia/Dhaka), রাত ১২টায় অটো রিসেট
+model DailyCredit {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date   String // YYYY-MM-DD (Asia/Dhaka)
+  used   Int    @default(0)
+  @@unique([userId, date])
+}
+
+// অ্যাডমিনের Gemini API কী পুল — রাউন্ড-রবিন লোড ব্যালেন্সিং
+model ApiKey {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  label     String?
+  active    Boolean  @default(true)
+  lastError String?  @db.Text
+  createdAt DateTime @default(now())
+}
+
+// সিস্টেম সেটিংস (মডেল নাম, দৈনিক কোটা)
+model Setting {
+  key   String @id
+  value String
+}
+
+model Book {
+  id        String    @id @default(cuid())
+  title     String
+  subject   String
+  board     String?
+  createdAt DateTime  @default(now())
+  chapters  Chapter[]
+}
+
+model Chapter {
+  id        String  @id @default(cuid())
+  bookId    String
+  book      Book    @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  title     String
+  number    Int?
+  pageStart Int?
+  chunks    Chunk[]
+  @@index([bookId])
+}
+
+// RAG চাঙ্ক — Gemini embedding ভেক্টর (JSON) TiDB-তে জমা
+model Chunk {
+  id        String   @id @default(cuid())
+  chapterId String
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  idx       Int
+  content   String   @db.Text
+  page      Int?
+  embedding Json?
+  embedded  Boolean  @default(false)
+  @@index([chapterId])
+  @@index([embedded])
+}
+
+model Question {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question   String   @db.Text
+  answer     String?  @db.Text
+  references Json?
+  createdAt  DateTime @default(now())
+  @@index([userId, createdAt])
+}
