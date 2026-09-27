@@ -168,3 +168,24 @@ Stage Summary:
 - User can now deploy to Vercel by: vercel.com → Sign Up with GitHub → Import repo → set 3 env vars (DATABASE_URL=mysql://...@gateway01.ap-southeast-1...:4000/tutor?sslaccept=strict, ADMIN_EMAIL, ADMIN_PASSWORD) → Deploy
 - TiDB production DB `tutor` pre-provisioned on user's own cluster; Vercel build auto-runs prisma db push so tables will also self-heal
 - Security warning delivered: user pasted GitHub token in chat — must revoke at github.com/settings/tokens after setup
+
+---
+Task ID: 8
+Agent: main (Z.ai Code)
+Task: z-ai fallback on Vercel — answer + env-based public API support
+
+Work Log:
+- User asked: "Vercel-এ z-ai fallback কি ব্যবহার করা যাবে?"
+- Investigated SDK: z-ai-web-dev-sdk loads credential ONLY from .z-ai-config file (cwd/home//etc), ZAI.create() takes no args; sandbox config = /etc/.z-ai-config with baseUrl internal-api.z.ai (platform-internal credential, Aliyun HK ALB) → cannot/should not be used on Vercel
+- SOLUTION IMPLEMENTED: rewrote src/lib/zai.ts with dual path:
+  1) ZAI_API_KEY env set → direct fetch to Z.ai PUBLIC platform (OpenAI-compatible api.z.ai/api/paas/v4/chat/completions, model ZAI_MODEL default glm-4.5-flash, ZAI_BASE_URL optional) — works on Vercel/any host with user's OWN key
+  2) env absent → existing sandbox SDK path (unchanged behavior)
+- Web search confirmed: Z.ai public platform has FREE tier Flash models (GLM-4.7-Flash free etc.); endpoint smoke-tested from sandbox → 401 "token expired or incorrect" with dummy key = correct URL + request format accepted
+- README: added "ঐচ্ছিক ধাপ ৭ — Vercel-এ z-ai ফলব্যাক চালু" (signup on z.ai Model API → env vars ZAI_API_KEY/ZAI_MODEL/ZAI_BASE_URL) + .env guide table extended with ZAI_* rows
+- tsc: src clean (only pre-existing examples/skills errors); eslint clean on zai.ts; endpoint 401 smoke test OK
+- Committed + pushed c27be9f (2 files, +72)
+
+Stage Summary:
+- Engine chain on Vercel: Gemini key pool → Z.ai public fallback (if ZAI_API_KEY set) → else clean NO_KEYS
+- Sandbox behavior unchanged (SDK path); users must NEVER copy sandbox .z-ai-config to external hosts
+- ai-engine.ts untouched — fallback orchestration already graceful
