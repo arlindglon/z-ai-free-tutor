@@ -37,7 +37,7 @@ export async function embedTexts(
   model: string,
   taskType: 'RETRIEVAL_QUERY' | 'RETRIEVAL_DOCUMENT'
 ): Promise<number[][]> {
-  return withKeyFailover(async (key) => {
+  return withKeyFailover('gemini', async (key) => {
     const res = await fetch(`${BASE}/models/${model}:batchEmbedContents`, {
       method: 'POST',
       headers: authHeaders(key),
@@ -68,7 +68,7 @@ export type GeneratedAnswer = { text: string; blocked: boolean }
 
 /** জেমিনাই দিয়ে উত্তর তৈরি (সিস্টেম ইনস্ট্রাকশনসহ) */
 export async function generateContent(prompt: string, system: string, model: string): Promise<GeneratedAnswer> {
-  return withKeyFailover(async (key) => {
+  return withKeyFailover('gemini', async (key) => {
     const res = await fetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: authHeaders(key),

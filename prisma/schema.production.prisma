@@ -48,9 +48,10 @@ model DailyCredit {
   @@unique([userId, date])
 }
 
-// অ্যাডমিনের Gemini API কী পুল — রাউন্ড-রবিন লোড ব্যালেন্সিং
+// অ্যাডমিনের AI কী পুল — Gemini ও Z.ai দুই ইঞ্জিনেরই (engine ফিল্ড), রাউন্ড-রবিন লোড ব্যালেন্সিং
 model ApiKey {
   id        String   @id @default(cuid())
+  engine    String   @default("gemini") // gemini | zai
   key       String   @unique
   label     String?
   active    Boolean  @default(true)

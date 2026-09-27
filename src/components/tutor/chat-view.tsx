@@ -68,7 +68,7 @@ function parseCredits(value: unknown): Credits | null {
   return null
 }
 
-function TypingDots() {
+function TypingDots({ note }: { note?: string | null }) {
   return (
     <div className="flex w-full justify-start">
       <div className="rounded-2xl rounded-bl-sm border border-emerald-100 bg-white px-4 py-3 shadow-sm">
@@ -81,6 +81,9 @@ function TypingDots() {
             />
           ))}
         </div>
+        {note && (
+          <p className="mt-1.5 text-xs font-medium text-amber-600">{note}</p>
+        )}
       </div>
     </div>
   )
@@ -171,6 +174,11 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
 
   const remaining = Math.max(0, credits.limit - credits.used)
 
+  // ইঞ্জিন ব্যস্ত হলে সাইলেন্ট অটো-রিট্রাই (স্টুডেন্ট কখনো টেকনিক্যাল এরর দেখবে না)
+  const [engineBusy, setEngineBusy] = useState(false)
+  const BUSY_WAITS = [3000, 6000]
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
   const send = async (raw: string) => {
     const text = raw.trim()
     if (!text || loading || historyLoading) return
@@ -189,23 +197,45 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
     try {
       const body: { question: string; subject?: string } = { question: text }
       if (subject !== ALL_SUBJECTS) body.subject = subject
-      const data = await api<ChatApiResponse>('/api/chat', { method: 'POST', body })
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === placeholderId
-            ? {
-                id: localId('a'),
-                role: 'tutor',
-                text: data.answer,
-                references:
-                  data.references && data.references.length > 0
-                    ? data.references
-                    : undefined,
-              }
-            : m,
-        ),
-      )
-      setCredits(data.credits)
+
+      // ব্যস্ত (503/429) হলে নিঃশব্দে আবার চেষ্টা — queue-র মতো, এরর দেখায় না
+      let data: ChatApiResponse | null = null
+      for (let attempt = 0; ; attempt++) {
+        try {
+          data = await api<ChatApiResponse>('/api/chat', { method: 'POST', body })
+          break
+        } catch (retryErr) {
+          const busy =
+            retryErr instanceof ApiError &&
+            (retryErr.status === 503 || retryErr.status === 429 || retryErr.status === 502)
+          if (busy && attempt < BUSY_WAITS.length) {
+            setEngineBusy(true)
+            await sleep(BUSY_WAITS[attempt])
+            continue
+          }
+          throw retryErr
+        }
+      }
+      setEngineBusy(false)
+
+      if (data) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === placeholderId
+              ? {
+                  id: localId('a'),
+                  role: 'tutor',
+                  text: data.answer,
+                  references:
+                    data.references && data.references.length > 0
+                      ? data.references
+                      : undefined,
+                }
+              : m,
+          ),
+        )
+        setCredits(data.credits)
+      }
     } catch (err) {
       if (err instanceof ApiError && err.code === 'NO_CREDITS') {
         const fromError = parseCredits(err.data?.credits)
@@ -223,17 +253,21 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
           ),
         )
       } else {
-        const message =
-          err instanceof ApiError ? err.message : 'সমস্যা হয়েছে, আবার চেষ্টা করো।'
+        // টেকনিক্যাল এরর কখনো দেখাবে না — সবসময় বন্ধুত্বপূর্ণ বার্তা
         setMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
-              ? { id: localId('s'), role: 'system', text: message }
+              ? {
+                  id: localId('s'),
+                  role: 'system',
+                  text: 'এখন টিউটর ইঞ্জিনগুলো একটু ব্যস্ত আছে 😅 কয়েক সেকেন্ড পর আবার একই প্রশ্ন পাঠাও — তখনই উত্তর পাবে! 🙏',
+                }
               : m,
           ),
         )
       }
     } finally {
+      setEngineBusy(false)
       setLoading(false)
     }
   }
@@ -367,7 +401,9 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
 
           {loading && (
             <div className="max-w-2xl">
-              <TypingDots />
+              <TypingDots
+                note={engineBusy ? 'ইঞ্জিন একটু ব্যস্ত — লাইনে অপেক্ষা করছি…' : null}
+              />
             </div>
           )}
 

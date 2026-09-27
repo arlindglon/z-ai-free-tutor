@@ -25,7 +25,7 @@ export type ChatApiResponse = {
   answer: string
   references: BookReference[]
   credits: Credits
-  engine?: 'gemini' | 'z-ai'
+  engine?: 'gemini' | 'zai'
 }
 
 export type HistoryMessage = {
@@ -36,8 +36,11 @@ export type HistoryMessage = {
   createdAt: string
 }
 
+export type EngineId = 'gemini' | 'zai'
+
 export type ApiKeyInfo = {
   id: string
+  engine: EngineId
   label: string | null
   masked: string
   active: boolean
@@ -77,4 +80,10 @@ export type SettingsInfo = {
   chatModel: string
   embeddingModel: string
   dailyCredits: number
+  /** মূল চ্যাট ইঞ্জিন — ফেইল হলে অন্যটা fallback */
+  primaryEngine: EngineId
+  geminiEnabled: boolean
+  zaiEnabled: boolean
+  /** মূল ইঞ্জিন ফেইল করলে অন্য ইঞ্জিন অটো-চেষ্টা হবে কি না */
+  fallbackEnabled: boolean
 }

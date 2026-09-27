@@ -15,9 +15,18 @@ async function requireAdmin() {
   return { user }
 }
 
-function toInfo(k: { id: string; label: string | null; key: string; active: boolean; lastError: string | null; createdAt: Date }) {
+function toInfo(k: {
+  id: string
+  engine: string
+  label: string | null
+  key: string
+  active: boolean
+  lastError: string | null
+  createdAt: Date
+}) {
   return {
     id: k.id,
+    engine: k.engine === 'zai' ? 'zai' : 'gemini',
     label: k.label,
     masked: maskKey(k.key),
     active: k.active,
@@ -30,26 +39,35 @@ function toInfo(k: { id: string; label: string | null; key: string; active: bool
 export async function GET() {
   const { err } = await requireAdmin()
   if (err) return err
-  const keys = await db.apiKey.findMany({ orderBy: { createdAt: 'asc' } })
+  const keys = await db.apiKey.findMany({ orderBy: [{ engine: 'asc' }, { createdAt: 'asc' }] })
   return NextResponse.json({ keys: keys.map(toInfo) })
 }
 
-/** নতুন Gemini API কী যোগ */
+/** নতুন API কী যোগ (Gemini বা Z.ai — body.engine) */
 export async function POST(req: NextRequest) {
   const { err } = await requireAdmin()
   if (err) return err
   const body = await req.json().catch(() => ({}))
   const key = String(body.key ?? '').trim()
   const label = String(body.label ?? '').trim() || null
+  const engine = body.engine === 'zai' ? 'zai' : 'gemini'
 
   if (key.length < 20) {
-    return NextResponse.json({ error: 'API কী ঠিকমতো দাও (Google AI Studio থেকে কপি করো)।' }, { status: 400 })
+    return NextResponse.json(
+      {
+        error:
+          engine === 'zai'
+            ? 'Z.ai API কী ঠিকমতো দাও (z.ai Model API থেকে কপি করো)।'
+            : 'API কী ঠিকমতো দাও (Google AI Studio থেকে কপি করো)।',
+      },
+      { status: 400 }
+    )
   }
   const exists = await db.apiKey.findUnique({ where: { key } })
   if (exists) {
     return NextResponse.json({ error: 'এই কী আগেই যোগ করা হয়েছে।' }, { status: 409 })
   }
-  const created = await db.apiKey.create({ data: { key, label } })
+  const created = await db.apiKey.create({ data: { key, label, engine } })
   invalidateKeyCache()
   return NextResponse.json({ key: toInfo(created) })
 }

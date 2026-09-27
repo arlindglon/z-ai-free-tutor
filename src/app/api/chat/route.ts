@@ -115,11 +115,12 @@ export async function POST(req: NextRequest) {
     await refundCredit(user.id).catch(() => {})
 
     if (e instanceof GeminiError) {
-      if (e.message === 'NO_KEYS') {
+      if (e.message === 'NO_KEYS' || e.message === 'NO_ENGINES_ENABLED') {
         return NextResponse.json(
           {
             code: 'NO_KEYS',
-            error: 'এখনো কোনো Gemini API কী যোগ করা হয়নি এবং z-ai ইঞ্জিনেও সমস্যা হচ্ছে। অ্যাডমিন প্যানেলে গিয়ে ফ্রি API কী যোগ করো।',
+            error:
+              'টিউটর ইঞ্জিন এখনো সেটআপ হয়নি — অ্যাডমিন প্যানেলে গিয়ে Gemini বা Z.ai ফ্রি API কী যোগ করো।',
           },
           { status: 503 }
         )

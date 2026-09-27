@@ -21,6 +21,13 @@ export async function PUT(req: NextRequest) {
     chatModel: body.chatModel !== undefined ? String(body.chatModel) : undefined,
     embeddingModel: body.embeddingModel !== undefined ? String(body.embeddingModel) : undefined,
     dailyCredits: body.dailyCredits !== undefined ? Number(body.dailyCredits) : undefined,
+    primaryEngine:
+      body.primaryEngine === 'gemini' || body.primaryEngine === 'zai'
+        ? body.primaryEngine
+        : undefined,
+    geminiEnabled: typeof body.geminiEnabled === 'boolean' ? body.geminiEnabled : undefined,
+    zaiEnabled: typeof body.zaiEnabled === 'boolean' ? body.zaiEnabled : undefined,
+    fallbackEnabled: typeof body.fallbackEnabled === 'boolean' ? body.fallbackEnabled : undefined,
   })
   return NextResponse.json({ settings })
 }

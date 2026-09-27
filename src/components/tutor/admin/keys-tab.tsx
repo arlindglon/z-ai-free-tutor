@@ -3,14 +3,18 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { Eye, EyeOff, Info, Loader2, Plus, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, ApiError } from '@/lib/api'
-import type { ApiKeyInfo } from '@/lib/types'
+import type { ApiKeyInfo, EngineId } from '@/lib/types'
+
+const ENGINE_LABEL: Record<EngineId, string> = { gemini: 'জেমিনাই', zai: 'Z.ai GLM' }
 
 export function KeysTab() {
   const [keys, setKeys] = useState<ApiKeyInfo[] | null>(null)
@@ -20,6 +24,7 @@ export function KeysTab() {
   // নতুন কী যোগের ফর্ম
   const [label, setLabel] = useState('')
   const [keyValue, setKeyValue] = useState('')
+  const [engine, setEngine] = useState<EngineId>('gemini')
   const [showKey, setShowKey] = useState(false)
   const [adding, setAdding] = useState(false)
 
@@ -59,7 +64,7 @@ export function KeysTab() {
     try {
       await api<{ key: ApiKeyInfo }>('/api/admin/keys', {
         method: 'POST',
-        body: { key: keyValue.trim(), label: label.trim() || undefined },
+        body: { key: keyValue.trim(), label: label.trim() || undefined, engine },
       })
       setLabel('')
       setKeyValue('')
@@ -116,9 +121,10 @@ export function KeysTab() {
       <Alert className="rounded-2xl border-emerald-200 bg-emerald-50 text-emerald-900">
         <Info className="h-4 w-4 text-emerald-600" />
         <AlertDescription className="text-emerald-800">
-          Google AI Studio (aistudio.google.com/apikey) থেকে ফ্রি Gemini API কী নাও — কোনো ক্রেডিট
-          কার্ড লাগে না। ৩-৪টি কী যোগ করলে সিস্টেম স্বয়ংক্রিয়ভাবে রাউন্ড-রবিন লোড ব্যালেন্সিং করবে:
-          কোনো কী রেট-লিমিট (429) খেলে মুহূর্তেই পরের কী-তে চলে যাবে।
+          দুই ইঞ্জিনেই যত খুশি ফ্রি API কী যোগ করো — সিস্টেম অটো রাউন্ড-রবিন লোড ব্যালেন্সিং করবে:
+          Gemini key নাও Google AI Studio থেকে (aistudio.google.com/apikey), আর Z.ai key নাও z.ai Model
+          API থেকে। কোনো কী রেট-লিমিট (429) খেলে মুহূর্তেই পরের কী-তে চলে যাবে — এক ইঞ্জিন ব্যস্ত হলে
+          অন্য ইঞ্জিন অটো উত্তর দেবে (সেটিংস ট্যাবে মূল ইঞ্জিন বাছাই)।
         </AlertDescription>
       </Alert>
 
@@ -126,6 +132,23 @@ export function KeysTab() {
       <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
         <CardContent className="p-4">
           <form onSubmit={handleAdd} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="key-engine" className="text-stone-700">
+                ইঞ্জিন
+              </Label>
+              <Select value={engine} onValueChange={(v) => setEngine(v === 'zai' ? 'zai' : 'gemini')}>
+                <SelectTrigger
+                  id="key-engine"
+                  className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+                >
+                  <SelectValue placeholder="ইঞ্জিন বাছো" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gemini">জেমিনাই (Google AI Studio)</SelectItem>
+                  <SelectItem value="zai">Z.ai GLM (z.ai Model API)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="key-label" className="text-stone-700">
@@ -149,7 +172,7 @@ export function KeysTab() {
                     id="key-value"
                     value={keyValue}
                     onChange={(e) => setKeyValue(e.target.value)}
-                    placeholder="AIzaSy... পেস্ট করো"
+                    placeholder={engine === 'zai' ? 'Z.ai key পেস্ট করো' : 'AIzaSy... পেস্ট করো'}
                     type={showKey ? 'text' : 'password'}
                     autoComplete="off"
                     required
@@ -213,9 +236,20 @@ export function KeysTab() {
                     }`}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-stone-800">
-                      {k.label || 'লেবেল নেই'}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-semibold text-stone-800">
+                        {k.label || 'লেবেল নেই'}
+                      </p>
+                      <Badge
+                        className={
+                          k.engine === 'zai'
+                            ? 'bg-amber-100 text-amber-800 hover:bg-amber-100'
+                            : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
+                        }
+                      >
+                        {ENGINE_LABEL[k.engine]}
+                      </Badge>
+                    </div>
                     <p className="truncate font-mono text-xs text-stone-500">{k.masked}</p>
                     <p className="text-xs text-stone-400">
                       {new Date(k.createdAt).toLocaleDateString('bn-BD')}

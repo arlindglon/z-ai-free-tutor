@@ -10,10 +10,11 @@ import ZAI from 'z-ai-web-dev-sdk'
  *    — নিজের API key, Vercel/যেকোনো হোস্টে চলে। ফ্রি Flash মডেল পাওয়া যায়।
  * ২. Env না থাকলে → স্যান্ডবক্স SDK (.z-ai-config ফাইল) — শুধু এই স্যান্ডবক্সে চলে।
  *
- * Env variables:
- *   ZAI_API_KEY   (প্রয়োজনীয়) https://z.ai Model API থেকে নিজের key
- *   ZAI_MODEL     (ঐচ্ছিক)   ডিফল্ট: glm-4.5-flash — ড্যাশবোর্ডে যে ফ্রি Flash মডেল আছে সেটা
+ * Env variables (DB pool খালি থাকলে ব্যবহৃত হয়):
+ *   ZAI_API_KEY   (ঐচ্ছিক) https://z.ai Model API থেকে নিজের key
+ *   ZAI_MODEL     (ঐচ্ছিক)   ডিফল্ট: glm-4.7-flash — ড্যাশবোর্ডে যে ফ্রি Flash মডেল আছে সেটা
  *   ZAI_BASE_URL  (ঐচ্ছিক)   ডিফল্ট: https://api.z.ai/api/paas/v4
+ *   ZAI_CONCURRENCY (ঐচ্ছিক) ডিফল্ট ২ — ফ্রি টিয়ারের একসাথে request লিমিট
  */
 
 type ZAIInstance = Awaited<ReturnType<typeof ZAI.create>>
@@ -53,14 +54,18 @@ interface OpenAiLikeResponse {
   choices?: ChatChoice[]
 }
 
-// ১) নিজের Z.ai key দিয়ে পাবলিক প্ল্যাটফর্ম — OpenAI-compatible এন্ডপয়েন্ট
-// ফ্রি টিয়ারে concurrency লিমিট আছে (429 code 1302) → ছোট backoff দিয়ে অটো-রিট্রাই
-async function envChatOnce(system: string, prompt: string): Promise<string> {
+// ১) একটি নির্দিষ্ট key দিয়ে Z.ai পাবলিক প্ল্যাটফর্ম কল — OpenAI-compatible এন্ডপয়েন্ট
+//    (key-pool থেকে key এসে ডাকা হয়; semaphore + 429-retry ভিতরেই)
+export async function zaiChatWithKey(apiKey: string, system: string, prompt: string): Promise<string> {
+  return withSlot(() => zaiCall(apiKey, system, prompt))
+}
+
+async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<string> {
   const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${ENV_API_KEY}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: ENV_MODEL,
@@ -81,22 +86,20 @@ async function envChatOnce(system: string, prompt: string): Promise<string> {
   return text
 }
 
-async function envChat(system: string, prompt: string): Promise<string> {
+async function zaiCall(apiKey: string, system: string, prompt: string): Promise<string> {
   const RETRIES = 2
   const BACKOFFS = [1200, 2400] // 429 হলে ছোট অপেক্ষা + jitter দিয়ে আবার
-  return withSlot(async () => {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await envChatOnce(system, prompt)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
-        if (!isRateLimit || attempt >= RETRIES) throw e
-        const base = BACKOFFS[attempt] ?? 2400
-        await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * 600)))
-      }
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await zaiHttp(apiKey, system, prompt)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
+      if (!isRateLimit || attempt >= RETRIES) throw e
+      const base = BACKOFFS[attempt] ?? 2400
+      await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * 600)))
     }
-  })
+  }
 }
 
 // ২) স্যান্ডবক্স SDK পথ (.z-ai-config ফাইল থেকে credential)
@@ -106,7 +109,17 @@ async function getZai(): Promise<ZAIInstance> {
 }
 
 export async function zaiChat(system: string, prompt: string): Promise<string> {
-  if (envConfigured) return envChat(system, prompt)
+  // DB key-pool-এ Z.ai key থাকলে সেগুলোই আগে (withKeyFailover রাউন্ড-রবিন)
+  const { getActiveKeys, withKeyFailover } = await import('@/lib/keypool')
+  const keys = await getActiveKeys('zai')
+  if (keys.length > 0) {
+    return withKeyFailover('zai', (key) => zaiCall(key, system, prompt))
+  }
+  if (envConfigured) {
+    // Env key (Vercel/সেলফ-হোস্ট)
+    return withSlot(() => zaiCall(ENV_API_KEY, system, prompt))
+  }
+  // শেষ ভরসা: স্যান্ডবক্স SDK credential (.z-ai-config ফাইল)
   const zai = await getZai()
   const completion = await zai.chat.completions.create({
     messages: [
