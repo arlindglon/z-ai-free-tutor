@@ -231,3 +231,35 @@ Work Log:
 Stage Summary:
 - Free-tier capacity measured: glm-4.7-flash ≈ 2 concurrent (~60-100 RPM sustained), glm-4.5-flash ≈ 4 concurrent
 - App now self-throttles before Z.ai's limit; students never see 429 errors from the fallback path
+
+---
+Task ID: 11
+Agent: main (Z.ai Code)
+Task: DUAL-ENGINE architecture — Gemini + Z.ai both fully admin-managed + never-show-error UX
+
+Work Log:
+- User request: both engines in admin panel; either can be primary; on/off per engine; unlimited key pools for BOTH; students must NEVER see errors; auto-queue everything
+- DB: ApiKey + engine field ('gemini'|'zai') in BOTH schemas; db push to sqlite + TiDB tutor (verified column)
+- keypool.ts: engine-aware — per-engine key cache, round-robin index, circuit breaker; getActiveKeys(engine), withKeyFailover(engine, fn), isEngineHealthy(engine), invalidateKeyCache(engine?); helpers isTransientAiError / isPermanentAiError
+- gemini.ts: withKeyFailover('gemini', ...) (embedTexts + generateContent)
+- zai.ts: zaiChatWithKey(apiKey,...) exported (semaphore + 429-retry inside); zaiChat chain = DB zai-pool → env ZAI_API_KEY → sandbox SDK credential
+- ai-engine.ts REWRITE: settings-driven order [primary, fallback?] → runPass loops engines (skips breaker-tripped, safety-block → next engine) → up to 2 extra passes with 2.5s/4s waits on transient errors (queue behavior) → blocked-only result surfaced; NO_KEYS/NO_ENGINES_ENABLED fail fast
+- settings.ts: +primaryEngine ('gemini' default), geminiEnabled, zaiEnabled, fallbackEnabled (bool, string storage)
+- chat route: friendly NO_KEYS/NO_ENGINES_ENABLED message; engine passthrough already
+- admin/keys route: POST engine field, GET engine in response (orderBy engine asc)
+- admin/settings route: PUT new fields
+- keys-tab.tsx: engine Select (জেমিনাই/Z.ai GLM) in add form, engine Badge per key row (emerald/amber), updated info alert
+- settings-tab.tsx: "ইঞ্জিন নিয়ন্ত্রণ" card — RadioGroup primary engine (custom labels w/ icons), 3 Switches (gemini/zai/fallback), both-off validation, auto-fix primary if engine disabled
+- chat-view.tsx: silent auto-retry on 503/429/502 (2 retries, 3s/6s), amber "ইঞ্জিন একটু ব্যস্ত — লাইনে অপেক্ষা করছি…" note under typing dots, ALL technical errors replaced with friendly Bengali busy message (never-show-error)
+- SEEDED TiDB tutor DB: user's real Z.ai key into ApiKey(engine=zai) + 4 Setting rows → Vercel deploy works out-of-box
+- E2E VERIFIED: 
+  * curl: add zai key 200 → settings PUT primary=zai+gemini off → chat ENGINE:zai ✓
+  * curl: primary=gemini (geo-blocked) → fallback ENGINE:zai ✓
+  * agent-browser: keys tab engine combobox + "Z.ai GLM" badge ✓; settings radio+switches render + UI save ✓; student signup → chat Q → step-by-step Bengali answer w/ KaTeX (E_k=½mv²) ✓; credits 30→29 ✓; zero console errors ✓; mobile 375px ok ✓
+  * dev server restart needed (stale Prisma client missing engine col) — done via setsid
+- tsc clean (src), eslint clean, README dual-engine section added; committed 27cb85e + pushed
+
+Stage Summary:
+- Engine chain now: [admin-selected primary (gemini|zai)] → [other engine if fallbackEnabled] → retry passes — all keys pooled per engine, unlimited
+- Students NEVER see technical errors (server retry passes + client silent retries + friendly copy)
+- Production TiDB pre-seeded with user's Z.ai key; Vercel deploy ready
