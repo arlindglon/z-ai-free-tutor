@@ -41,10 +41,10 @@ const BASE_CONCURRENCY = Math.max(1, Number(process.env.ZAI_CONCURRENCY ?? '2') 
 let capacity = BASE_CONCURRENCY
 
 /** key-pool-এ কয়টা active key আছে জানিয়ে দাও — প্রতি key-এ ঠিক ১টা slot
- *  (key কমলে slot-ও কমে, যাতে ৪২৯-এ একসাথে ধাক্কা না লাগে; সর্বোচ্চ ৬) */
+ *  (key কমলে slot-ও কমে, যাতে ৪২৯-এ একসাথে ধাক্কা না লাগে; সর্বোচ্চ ১২) */
 export function tuneZaiCapacity(keyCount: number): void {
   if (EXPLICIT_CONCURRENCY) return
-  capacity = Math.min(6, Math.max(1, Math.floor(keyCount) || 1))
+  capacity = Math.min(12, Math.max(1, Math.floor(keyCount) || 1))
 }
 
 let active = 0
