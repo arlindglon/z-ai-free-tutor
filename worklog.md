@@ -288,3 +288,23 @@ Stage Summary:
 - 4 keys live in local DB; queue mathematically near-impossible to surface errors (3 layers: per-key slots+retry → 90s deadline queue → 4× browser retry)
 - All code changes lint-clean; E2E verified in browser end-to-end
 - Files: src/lib/zai.ts, src/lib/keypool.ts, src/lib/ai-engine.ts, src/app/api/chat/route.ts, src/components/tutor/chat-view.tsx, README.md
+
+---
+Task ID: 12
+Agent: Z.ai Code (main)
+Task: অ্যাডমিন প্যানেলে নতুন Z.ai GLM key (f599...6xVI) যোগ করতে "কী যোগ করা গেল না" এরর — ডায়াগনোসিস + ফিক্স
+
+Work Log:
+- keys-tab.tsx এ জেনেরিক মেসেজ শুধু non-ApiError (fetch throw) ক্ষেত্রে আসে — মানে প্রোডাকশনে fetch লেভেলে ফেল বা সার্ভার 500
+- লোকালে exact payload দিয়ে repro: admin login → POST /api/admin/keys (engine=zai, ইউজারের key) → 200 OK, কী তৈরি হয় → কোড পাথ ঠিক, সমস্যা প্রোডাকশন-স্পেসিফিক (TiDB স্কিমা/নেটওয়ার্ক)
+- আগের ভার্সনে db.apiKey.create unhandled ছিল — TiDB এরর হলে Vercel 500 + অন্ধ "আবার চেষ্টা করো"
+- src/lib/key-format.ts নতুন: detectKeyEngine() — 32hex.16 → zai, AQ./AIzaSy → gemini
+- /api/admin/keys রিরাইট: সব হ্যান্ডলার try/catch, Prisma এরর ম্যাপিং (P2002→409 ডুপ্লিকেট বার্তা, P2021/P2022→"prisma db push চালাও" বার্তা), কী থেকে সব হোয়াইটস্পেস স্ট্রিপ, ফরম্যাট থেকে ইঞ্জিন অটো-কারেক্ট (ড্রপডাউন ভুল হলেও)
+- keys-tab.tsx: কী পেস্ট করলেই ইঞ্জিন ড্রপডাউন অটো-সুইচ; non-ApiError → "নেটওয়ার্ক সমস্যা" বার্তা
+- লোকাল E2E (curl + agent-browser): ডুপ্লিকেট 409 বার্তা ✓, ভুল ইঞ্জিনে জেমিনাই key → অটো-কারেক্ট ✓, হোয়াইটস্পেস স্ট্রিপ ✓, UI-তে পেস্টে ড্রপডাউন অটো-সুইচ ✓, অ্যালার্টে আসল কারণ দেখা যায় ✓, console এরর নেই ✓
+- lint ক্লিন, commit d1d47d7 পুশ → Vercel অটো-রিডিপ্লয়
+
+Stage Summary:
+- রুট কজ (প্রোডাকশন): সম্ভবত TiDB-তে আগের চেষ্টায় key সেভ হয়ে গিয়েছিল কিন্তু রেসপন্স হারিয়েছিল → পরের চেষ্টা ডুপ্লিকেট/DB এরর, আর পুরনো UI আসল কারণ লুকিয়ে "কী যোগ করা গেল না" দেখাচ্ছিল; TiDB স্কিমা পুরনো হলেও এখন বার্তায় স্পষ্ট ধরা পড়বে
+- ইউজারকে দেওয়া নির্দেশ: Vercel রিডিপ্লয়ের পর আবার চেষ্টা করো; আগে তালিকায় f599c8••••6xVI আছে কিনা দেখো; নতুন স্পষ্ট বার্তা এলে সেটাই আসল কারণ
+- ফাইল: src/lib/key-format.ts (নতুন), src/app/api/admin/keys/route.ts, src/components/tutor/admin/keys-tab.tsx
