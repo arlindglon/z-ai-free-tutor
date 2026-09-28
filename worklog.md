@@ -308,3 +308,26 @@ Stage Summary:
 - রুট কজ (প্রোডাকশন): সম্ভবত TiDB-তে আগের চেষ্টায় key সেভ হয়ে গিয়েছিল কিন্তু রেসপন্স হারিয়েছিল → পরের চেষ্টা ডুপ্লিকেট/DB এরর, আর পুরনো UI আসল কারণ লুকিয়ে "কী যোগ করা গেল না" দেখাচ্ছিল; TiDB স্কিমা পুরনো হলেও এখন বার্তায় স্পষ্ট ধরা পড়বে
 - ইউজারকে দেওয়া নির্দেশ: Vercel রিডিপ্লয়ের পর আবার চেষ্টা করো; আগে তালিকায় f599c8••••6xVI আছে কিনা দেখো; নতুন স্পষ্ট বার্তা এলে সেটাই আসল কারণ
 - ফাইল: src/lib/key-format.ts (নতুন), src/app/api/admin/keys/route.ts, src/components/tutor/admin/keys-tab.tsx
+
+---
+Task ID: 13
+Agent: Z.ai Code (main)
+Task: উত্তরের স্বাক্ষর (মডেল মার্ক — ইঞ্জিন-প্রতি র‍্যান্ডম নাম পুল) + RAG লক মোড
+
+Work Log:
+- schema.prisma + schema.production.prisma: Question.answerTag String? যোগ; লোকাল db:push (Vercel build অটো db push করে TiDB-তেও)
+- settings.ts: tagNameGemini/tagNameZai (নিউলাইন-সেপারেটেড পুল, ৪০০০ অক্ষর), ragOnlyMode (bool) + pickTagName() র‍্যান্ডম পিকার (৫০০ লাইন ক্যাপ)
+- gemini.ts buildSystemPrompt({ragOnly}): RAG লকে নিয়ম ৫ বদলে কঠোর নিয়ম — শুধু রেফারেন্স থেকে উত্তর, না পেলে "পাঠ্যবইয়ে পাইনি 📖"; রেফারেন্স খালি থাকলেও বানানো যাবে না (নিয়ম ১০)
+- chat route: result.engine অনুযায়ী পুল বেছে pickTagName → Question.answerTag সেভ + রেসপনসে answerTag
+- history route: answerTag রিটার্ন
+- admin settings route PUT: তিন নতুন ফিল্ড
+- settings-tab UI: "উত্তরের স্বাক্ষর" কার্ড (দুই টেক্সটএরিয়া, লাইন বাই লাইন) + "শুধু বই থেকে উত্তর (RAG লক)" সুইচ কার্ড
+- message-bubble: tutor বাবলে ✍ <tag> ফেইন্ট ব্যাজ (tag থাকলেই); chat-view হিস্ট্রি+লাইভ ম্যাপিং
+- E2E: সেটিংস PUT/GET ✓; চ্যাটে tag "Z-9" র‍্যান্ডম পিক + DB সেভ + হিস্ট্রি ✓; UI ব্যাজ "✍ Z-9" রেন্ডার ✓; RAG লক UI টগল+সেভ ✓; লক চালু অবস্থায় বইয়ের বাইরের প্রশ্নে প্রত্যাখ্যান ✓
+- টেস্ট student একাউন্ট student-e2e@test.bd (device binding ক্লিয়ার করা, পাসওয়ার্ড রিসেট test12345)
+- lint ক্লিন; commit d403263 পুশ
+
+Stage Summary:
+- নতুন Setting keys: tagNameGemini, tagNameZai, ragOnlyMode (key-value টেবিল — TiDB-তে আলাদা মাইগ্রেশন লাগে না)
+- TiDB-তে Question.answerTag কলাম Vercel deploy-এ অটো তৈরি হবে (buildCommand db push)
+- স্বাক্ষর পুল খালি = ব্যাজ দেখাবে না (ডিফল্ট) — অ্যাডমিন সেট করলেই চালু
