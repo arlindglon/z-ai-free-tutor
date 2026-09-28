@@ -27,15 +27,31 @@ const ENV_BASE_URL =
 
 const envConfigured = ENV_API_KEY.length > 0
 
-// ফ্রি টিয়ারে concurrency লিমিট (~২ একসাথে, 429 code 1302) →
-// লোকাল সেমাফোর: লিমিটের বেশি request লাইনে অপেক্ষা করে, 429 আসেই না।
+// ফ্রি টিয়ারে concurrency লিমিট (429 code 1302/1305 "temporarily overloaded") →
+// লোকাল সেমাফোর: লিমিটের বেশি request লাইনে অপেক্ষা করে (queue), 429 আসেই না।
 // সার্ভারলেসে একাধিক instance থাকলে এটা per-instance — বাকি থাকলে নিচের retry ধরে।
-const ENV_CONCURRENCY = Math.max(1, Number(process.env.ZAI_CONCURRENCY ?? '2') || 2)
+//
+// ক্ষমতা (capacity):
+// - ZAI_CONCURRENCY স্পষ্ট সেট করা থাকলে সেটাই চূড়ান্ত
+// - না থাকলে ডায়নামিক: DB key-pool-এর প্রতিটা key-এর জন্য ১টা করে slot
+//   (১ key = পরপর চলবে, ৪ key = ৪টা একসাথে) — key যোগ করলেই ক্ষমতা বাড়ে
+const EXPLICIT_CONCURRENCY =
+  process.env.ZAI_CONCURRENCY !== undefined && process.env.ZAI_CONCURRENCY !== ''
+const BASE_CONCURRENCY = Math.max(1, Number(process.env.ZAI_CONCURRENCY ?? '2') || 2)
+let capacity = BASE_CONCURRENCY
+
+/** key-pool-এ কয়টা active key আছে জানিয়ে দাও — প্রতি key-এ ঠিক ১টা slot
+ *  (key কমলে slot-ও কমে, যাতে ৪২৯-এ একসাথে ধাক্কা না লাগে; সর্বোচ্চ ৬) */
+export function tuneZaiCapacity(keyCount: number): void {
+  if (EXPLICIT_CONCURRENCY) return
+  capacity = Math.min(6, Math.max(1, Math.floor(keyCount) || 1))
+}
+
 let active = 0
 const waiters: Array<() => void> = []
 
 async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
-  if (active >= ENV_CONCURRENCY) {
+  if (active >= capacity) {
     await new Promise<void>((resolve) => waiters.push(resolve))
   }
   active++
@@ -87,8 +103,8 @@ async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<
 }
 
 async function zaiCall(apiKey: string, system: string, prompt: string): Promise<string> {
-  const RETRIES = 2
-  const BACKOFFS = [1200, 2400] // 429 হলে ছোট অপেক্ষা + jitter দিয়ে আবার
+  const RETRIES = 3
+  const BACKOFFS = [1500, 3000, 5000] // 429 (1302/1305) হলে অপেক্ষা + jitter — লাইনে দাঁড়িয়ে আবার
   for (let attempt = 0; ; attempt++) {
     try {
       return await zaiHttp(apiKey, system, prompt)
@@ -96,8 +112,8 @@ async function zaiCall(apiKey: string, system: string, prompt: string): Promise<
       const msg = e instanceof Error ? e.message : String(e)
       const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
       if (!isRateLimit || attempt >= RETRIES) throw e
-      const base = BACKOFFS[attempt] ?? 2400
-      await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * 600)))
+      const base = BACKOFFS[attempt] ?? 5000
+      await new Promise((r) => setTimeout(r, base + Math.floor(Math.random() * 800)))
     }
   }
 }

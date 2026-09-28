@@ -146,6 +146,19 @@ DATABASE_URL="mysql://<USER>:<PASSWORD>@gateway01.ap-southeast-1.prod.aws.tidbcl
   bunx prisma db push --schema prisma/schema.production.prisma
 ```
 
+### প্রোডাকশন DB-তে key আগেই ঢুকাতে চাইলে (ঐচ্ছিক SQL)
+
+Vercel ডিপ্লয়ের পর অ্যাডমিন প্যানেল থেকেই key যোগ করা যায়। তবে আগেই ঢুকাতে চাইলে TiDB Cloud → SQL Editor-এ:
+
+```sql
+-- জেমিনাই key (যত খুশি, engine='gemini')
+INSERT IGNORE INTO ApiKey (id, engine, `key`, label, active, createdAt)
+VALUES (REPLACE(UUID(),'-',''), 'gemini', 'AIzaSy...বা AQ.Ab8R...', 'জেমিনাই ১', 1, NOW(3));
+-- Z.ai key (engine='zai')
+INSERT IGNORE INTO ApiKey (id, engine, `key`, label, active, createdAt)
+VALUES (REPLACE(UUID(),'-',''), 'zai', 'xxxx.yyyy', 'GLM ফ্ল্যাশ', 1, NOW(3));
+```
+
 ---
 
 ## 🛠️ অ্যাডমিন প্যানেল গাইড
@@ -156,11 +169,17 @@ DATABASE_URL="mysql://<USER>:<PASSWORD>@gateway01.ap-southeast-1.prod.aws.tidbcl
 
 **দুই ইঞ্জিনেরই কী-পুল আছে — যত খুশি key যোগ করো:**
 
-1. **জেমিনাই**: [Google AI Studio](https://aistudio.google.com/apikey) → ফ্রি key বানাও
+1. **জেমিনাই**: [Google AI Studio](https://aistudio.google.com/apikey) → ফ্রি key বানাও (পুরনো `AIzaSy…` ও নতুন `AQ.…` — দুই ফরম্যাটই চলে)
 2. **Z.ai GLM**: [z.ai](https://z.ai) → Model API → Sign Up → ফ্রি key বানাও (GLM-4.7-Flash ফ্রি)
 3. অ্যাডমিন প্যানেল → **API Keys** ট্যাব → **ইঞ্জিন বাছো** (জেমিনাই বা Z.ai) → key পেস্ট → যোগ করো
-4. **যত পারো তত key যোগ করো** — প্রতিটি key-এর নিজস্ব ফ্রি কোটা, round-robin মিলিয়ে চলে
+4. **যত পারো তত key যোগ করো** — প্রতিটি key-এর নিজস্ব ফ্রি কোটা, round-robin মিলিয়ে চলে;
+   Z.ai-তে প্রতি key-এর জন্য আলাদা concurrency slot খুলে যায় (key যোগ করলেই ক্ষমতা বাড়ে)
 5. কোনো key মরে গেলে (৪২৯/৫xx) পরের key-তে অটো সুইচ; ৪০১/৪০৩ হলে key অটো-ডি অ্যাক্টিভ
+
+> 🧪 **কী টেস্ট রিপোর্ট (পরীক্ষিত)**: ৩টি নতুন ফরম্যাট Gemini key (`AQ.Ab8R…`) **ভ্যালিড** — Google সেগুলো চিনেছে
+> (ভুল key দিলে "API key not valid" আসে, আমাদের key-গুলোতে এসেছে "location not supported" = key ঠিক, শুধু
+> স্যান্ডবক্সের রিজিয়ন ব্লকড)। Vercel-এর মার্কিন সার্ভার থেকে এগুলো সরাসরি কাজ করবে।
+> Z.ai GLM key লাইভ টেস্টেড ✅ — বাংলা উত্তর ঠিকঠাক আসছে।
 
 ### 🎛️ ইঞ্জিন নিয়ন্ত্রণ (সেটিংস ট্যাব)
 
@@ -171,9 +190,27 @@ DATABASE_URL="mysql://<USER>:<PASSWORD>@gateway01.ap-southeast-1.prod.aws.tidbcl
 | **Z.ai on/off** | বন্ধ করলে সব প্রশ্ন জেমিনাইতে যায় |
 | **অটো-ফলব্যাক** | মূল ইঞ্জিন ফেইল/ব্যস্ত হলে অন্যটা অটো উত্তর দেয় |
 
-> 🛡️ **নেভার-শো-এরর নীতি**: ইঞ্জিন ব্যস্ত হলে request লাইনে অপেক্ষা করে (queue), ব্রাউজার নিঃশব্দে আবার চেষ্টা করে —
-> শিক্ষার্থী কোনো টেকনিক্যাল এরর দেখে না, শুধু "ইঞ্জিন একটু ব্যস্ত — লাইনে অপেক্ষা করছি…" লেখা দেখে।
+> 🛡️ **নেভার-শো-এরর নীতি — ৩ স্তরের queue** (ইঞ্জিন ব্যস্ত থাকলেও শিক্ষার্থী কোনো এরর দেখে না):
+>
+> 1. **Key-স্তর**: Z.ai-তে প্রতি key-এ নিজস্ব concurrency slot — বেশি request লাইনে দাঁড়ায়, ৪২৯ আসেই না;
+>    তবু ৪২৯ (code 1302/1305) এলে ৩ বার backoff-retry (১.৫/৩/৫ সে + jitter)
+> 2. **ইঞ্জিন-স্তর**: কী-পুল round-robin → মূল ইঞ্জিন ফেইল হলে অন্য ইঞ্জিন; তারপরও ব্যস্ত হলে
+>    **৯০ সেকেন্ড পর্যন্ত** deadline-queue — ব্রেকার মেয়াদ শেষ হলেই আবার চেষ্টা (ব্রেকার ৪৫ সে)
+> 3. **ব্রাউজার-স্তর**: এরপরও 503 এলে ব্রাউজার নিঃশব্দে ৪ বার আরও চেষ্টা করে (৩+৫+৮+১২ সে)
+>
+> তিন স্তর মিলে ব্যস্ত-এরর দেখানো প্রায় অসম্ভব — শিক্ষার্থী শুধু "ইঞ্জিন একটু ব্যস্ত — লাইনে অপেক্ষা করছি…" দেখে।
 > এমবেডিং (বই খোঁজা) সবসময় Gemini দিয়ে; Gemini কী না থাকলে TF-IDF লেক্সিকাল সার্চ চলে।
+
+### 📊 ফ্রি টিয়ার রেট-লিমিট (লাইভ টেস্ট করা তথ্য)
+
+| ইঞ্জিন/মডেল | একসাথে (concurrency) | বেশি পাঠালে | রিকভারি | সমাধান (অটো) |
+|---|---|---|---|---|
+| Gemini 3.5 Flash-Lite | প্রতি key ~২ | ৪২৯ | কয়েক সেকেন্ড | পরের key → fallback |
+| GLM-4.7-Flash | প্রতি key ~১-২ (burst-এ ৪২৯ code **1305** "temporarily overloaded") | ৪২৯ | ~১৫ সেকেন্ড | per-key slot + retry + fallback |
+| GLM-4.5-Flash | প্রতি key ~৩-৪ | ৪২৯ | ~১৫ সেকেন্ড | একই |
+
+> 💡 **মোট ক্ষমতা = key সংখ্যা × প্রতি-key লিমিট**। ১০ জন শিক্ষার্থী একসাথে প্রশ্ন করলেও যেন সবাই উত্তর পায়,
+> সেজন্যই প্রতি ইঞ্জিনে ৩-৫টা key রাখা ভালো।
 
 ### ২️⃣ নলেজ বেস (বই আপলোড)
 

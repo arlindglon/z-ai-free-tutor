@@ -5,9 +5,10 @@ import {
   isEngineHealthy,
   isTransientAiError,
   isPermanentAiError,
+  nextEngineWakeMs,
 } from '@/lib/keypool'
 import { generateContent, type GeneratedAnswer } from '@/lib/gemini'
-import { zaiChat, zaiChatWithKey } from '@/lib/zai'
+import { zaiChat, zaiChatWithKey, tuneZaiCapacity } from '@/lib/zai'
 import type { AppSettings } from '@/lib/settings'
 import type { EngineId } from '@/lib/types'
 
@@ -34,6 +35,8 @@ async function attempt(
   }
   const keys = await getActiveKeys('zai')
   if (keys.length > 0) {
+    // key যত আছে তত slot খুলে দাও — key যোগ করলেই সাথে সাথে ক্ষমতা বাড়ে
+    tuneZaiCapacity(keys.length)
     const text = await withKeyFailover('zai', (key) => zaiChatWithKey(key, system, prompt))
     return { text, blocked: false }
   }
@@ -96,14 +99,23 @@ export async function generateTutorAnswer(
   // পাস ১
   let outcome = await runPass(order, prompt, system, settings)
 
-  // পাস ২+৩: ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত) হলে অপেক্ষা করে আবার —
-  // শিক্ষার্থীর প্রশ্ন queue-তে দাঁড়িয়ে থাকে, এরর দেখে না
-  const WAITS = [2500, 4000]
-  for (let pass = 0; !outcome.result && pass < WAITS.length; pass++) {
+  // পাস ২+: ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত/ব্রেকার) → deadline-ভিত্তিক queue:
+  // - ছোট ঝামেলা হলে ছোট অপেক্ষা (jitter সহ)
+  // - কোনো ইঞ্জিনের ব্রেকার ট্রিপ থাকলে তার মেয়াদ শেষ না হওয়া পর্যন্ত অপেক্ষা (সর্বোচ্চ ২৫ সে)
+  // - মোট ~৯০ সেকেন্ড ধৈর্য — এর মধ্যে ফ্রি টিয়ারের রেট-লিমিট কয়েকবার রিকভার করে
+  // শিক্ষার্থীর প্রশ্ন পুরো সময়টা queue-তে দাঁড়িয়ে থাকে, এরর দেখে না
+  const DEADLINE_MS = 90_000
+  const start = Date.now()
+  const WAITS = [1500, 3000, 5000, 8000, 12000, 15000, 20000, 25000]
+  let pass = 0
+  while (!outcome.result && pass < WAITS.length && Date.now() - start < DEADLINE_MS) {
     if (outcome.err && isPermanentAiError(outcome.err)) break
     if (!outcome.err || !isTransientAiError(outcome.err)) break
-    await new Promise((r) => setTimeout(r, WAITS[pass]))
+    const wake = nextEngineWakeMs()
+    const wait = Math.max(WAITS[pass] + Math.floor(Math.random() * 500), Math.min(wake, 25_000))
+    await new Promise((r) => setTimeout(r, wait))
     outcome = await runPass(order, prompt, system, settings)
+    pass++
   }
 
   if (outcome.result) return outcome.result

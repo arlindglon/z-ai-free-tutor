@@ -22,10 +22,21 @@ const states: Record<EngineId, EngineState> = {
   zai: { cache: null, rrIndex: 0, downUntil: 0 },
 }
 
-const ENGINE_DOWN_MS = 120_000
+// ব্রেকার ৪৫ সেকেন্ড — পুরো পুল একবার ফেইল হলে ৪৫ সে পর আবার সুযোগ নেয়।
+// ফ্রি টিয়ারের রেট-লিমিট ~১৫ সেকেন্ডেই রিকভার করে, তাই ৪৫ নিরাপদ + queue-বান্ধব
+const ENGINE_DOWN_MS = 45_000
 
 export function isEngineHealthy(engine: EngineId): boolean {
   return Date.now() >= states[engine].downUntil
+}
+
+/** কোনো ইঞ্জিনের ব্রেকার ট্রিপ হলে সবচেয়ে আগে যেটা সুস্থ হবে — কত ms দূরে (সব সুস্থ হলে ০) */
+export function nextEngineWakeMs(): number {
+  const now = Date.now()
+  const positive = (Object.keys(states) as EngineId[])
+    .map((e) => states[e].downUntil - now)
+    .filter((ms) => ms > 0)
+  return positive.length ? Math.min(...positive) : 0
 }
 
 /** নির্দিষ্ট ইঞ্জিনের কী-ক্যাশ ভাঙো; engine না দিলে দুটোই */

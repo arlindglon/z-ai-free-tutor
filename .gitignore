@@ -52,3 +52,9 @@ prompt
 server.log
 # Skills directory
 /skills/.screens/
+
+# sqlite / local db files (never commit — contains API keys)
+db/
+*.db
+*.sqlite
+*.sqlite3

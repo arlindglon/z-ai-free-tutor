@@ -176,7 +176,9 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
 
   // ইঞ্জিন ব্যস্ত হলে সাইলেন্ট অটো-রিট্রাই (স্টুডেন্ট কখনো টেকনিক্যাল এরর দেখবে না)
   const [engineBusy, setEngineBusy] = useState(false)
-  const BUSY_WAITS = [3000, 6000]
+  // ৪ পর্যন্ত নিঃশব্দ রিট্রাই (~২৮ সেকেন্ড অপেক্ষা) + প্রতিটা চেষ্টায় ব্যাকএন্ড নিজেই ৫ পাস কিউ করে —
+  // দুই স্তরের queue মিলে ব্যস্ত-এরর দেখানো প্রায় অসম্ভব করে দেয়
+  const BUSY_WAITS = [3000, 5000, 8000, 12000]
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
   const send = async (raw: string) => {
@@ -207,6 +209,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
         } catch (retryErr) {
           const busy =
             retryErr instanceof ApiError &&
+            retryErr.code !== 'NO_KEYS' && // সেটআপ-এরর হলে লাইনে দাঁড়ানোর মানে নেই
             (retryErr.status === 503 || retryErr.status === 429 || retryErr.status === 502)
           if (busy && attempt < BUSY_WAITS.length) {
             setEngineBusy(true)
@@ -249,6 +252,15 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
                   role: 'system',
                   text: `${err.message}\n\n🌙 কাল রাত ১২টায় আবার ${toBn(nextLimit)}টি প্রশ্ন যোগ হয়ে যাবে!`,
                 }
+              : m,
+          ),
+        )
+      } else if (err instanceof ApiError && err.code === 'NO_KEYS') {
+        // ইঞ্জিন সেটআপ হয়নি — অ্যাডমিনের জন্য পরিষ্কার নির্দেশনা (এটা এরর না, সেটআপ-নোটিশ)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === placeholderId
+              ? { id: localId('s'), role: 'system', text: err.message }
               : m,
           ),
         )

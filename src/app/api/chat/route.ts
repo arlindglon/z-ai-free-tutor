@@ -6,7 +6,7 @@ import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
 import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
 import { retrieveTopK, retrieveTopKLexical } from '@/lib/rag'
-import { GeminiError } from '@/lib/keypool'
+import { GeminiError, isTransientAiError } from '@/lib/keypool'
 
 /**
  * মূল ডাটা-ফ্লো:
@@ -122,6 +122,14 @@ export async function POST(req: NextRequest) {
             error:
               'টিউটর ইঞ্জিন এখনো সেটআপ হয়নি — অ্যাডমিন প্যানেলে গিয়ে Gemini বা Z.ai ফ্রি API কী যোগ করো।',
           },
+          { status: 503 }
+        )
+      }
+      // রেট-লিমিট/ব্যস্ত/সার্ভার-ঝামেলা = ট্রানজিয়েন্ট → 503 দাও যাতে ক্লায়েন্ট নিঃশব্দে
+      // আবার চেষ্টা করে (queue-র মতো) — শিক্ষার্থী কখনো এরর দেখবে না
+      if (isTransientAiError(e)) {
+        return NextResponse.json(
+          { code: 'ENGINE_BUSY', error: 'ইঞ্জিন একটু ব্যস্ত — লাইনে অপেক্ষা করছে।' },
           { status: 503 }
         )
       }
