@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  BookOpen,
+  CheckCircle2,
   CloudUpload,
   FileText,
-  FileUp,
   Loader2,
   PenLine,
+  RotateCcw,
   Sparkles,
   Trash2,
   X,
+  XCircle,
 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +26,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api, ApiError } from '@/lib/api'
 import { SUBJECTS, toBn } from '@/lib/bn'
+import { cleanBookTitle, splitPdfForUpload } from '@/lib/pdf-split'
 import type { BookInfo } from '@/lib/types'
 
 type DraftChapter = {
@@ -41,12 +45,32 @@ type UploadResult = {
   autoEmbed: boolean
 }
 
+/** আপলোড কিউ-এর একটা ফাইল — ড্রপ করলেই পরপর প্রসেস হয় */
+type QueueItem = {
+  id: string
+  file: File
+  fileName: string
+  fileSize: number
+  subject: string
+  board: string
+  status: 'waiting' | 'working' | 'done' | 'failed'
+  phase: string | null
+  message: string | null
+  error: string | null
+}
+
 const MAX_PDF_BYTES = 150 * 1024 * 1024
 
 function formatSize(bytes: number): string {
   const mb = bytes / (1024 * 1024)
   if (mb >= 1) return `${mb.toFixed(1)} MB`
   return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function newId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `q-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 export function BooksTab() {
@@ -56,15 +80,27 @@ export function BooksTab() {
   // মোড টগল: PDF আপলোড (ডিফল্ট) / ম্যানুয়াল লেখা
   const [mode, setMode] = useState<'pdf' | 'manual'>('pdf')
 
-  // PDF আপলোড স্টেট
-  const [file, setFile] = useState<File | null>(null)
+  // PDF আপলোড কিউ — ড্রপ করলেই অটো-স্টার্ট, একাধিক একসাথে
+  const [queue, setQueue] = useState<QueueItem[]>([])
+  const queueRef = useRef<QueueItem[]>([])
+  const runningRef = useRef(false)
   const [dragging, setDragging] = useState(false)
-  const [uploading, setUploading] = useState(false)
-  const [uploadError, setUploadError] = useState<string | null>(null)
-  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
   const [pdfSubject, setPdfSubject] = useState('')
   const [pdfBoard, setPdfBoard] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const setQueueBoth = useCallback((updater: (prev: QueueItem[]) => QueueItem[]) => {
+    const next = updater(queueRef.current)
+    queueRef.current = next
+    setQueue(next)
+  }, [])
+
+  const updateItem = useCallback(
+    (id: string, patch: Partial<QueueItem>) => {
+      setQueueBoth((prev) => prev.map((q) => (q.id === id ? { ...q, ...patch } : q)))
+    },
+    [setQueueBoth]
+  )
 
   // ম্যানুয়াল বইয়ের ফর্ম
   const [title, setTitle] = useState('')
@@ -119,76 +155,140 @@ export function BooksTab() {
     return () => clearInterval(t)
   }, [anyAutoEmbedding, loadBooks])
 
-  // ---------- PDF আপলোড ----------
-  function acceptFile(f: File | null | undefined) {
-    setUploadError(null)
-    setUploadSuccess(null)
-    if (!f) return
-    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-    if (!isPdf) {
-      setUploadError('শুধু PDF ফাইল দেওয়া যাবে।')
-      return
-    }
-    if (f.size > MAX_PDF_BYTES) {
-      setUploadError('ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।')
-      return
-    }
-    setFile(f)
-  }
+  // ---------- PDF আপলোড কিও রানার ----------
+  const processItem = useCallback(
+    async (item: QueueItem) => {
+      updateItem(item.id, { status: 'working', phase: 'বই পড়া হচ্ছে…', error: null, message: null })
+      try {
+        // বড় PDF ব্রাউজারেই পাতা-ধরে ভেঙে যায় (Vercel-এর ৪.৫MB লিমিট টপকাতে)
+        const { parts, pageCount: splitPageCount } = await splitPdfForUpload(item.file)
+        let bookId: string | null = null
+        let totalChunks = 0
+        let totalPages = splitPageCount
 
-  function clearFile() {
-    setFile(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
+        for (let i = 0; i < parts.length; i++) {
+          const part = parts[i]
+          updateItem(item.id, {
+            phase:
+              parts.length > 1
+                ? `অংশ ${toBn(i + 1)}/${toBn(parts.length)} আপলোড হচ্ছে…`
+                : 'আপলোড হচ্ছে…',
+          })
 
-  async function handleUpload() {
-    if (uploading || !file) return
-    setUploading(true)
-    setUploadError(null)
-    setUploadSuccess(null)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      if (pdfSubject) fd.append('subject', pdfSubject)
-      if (pdfBoard.trim()) fd.append('board', pdfBoard.trim())
+          const fd = new FormData()
+          fd.append('file', part.blob, part.name)
+          if (i === 0) {
+            fd.append('title', cleanBookTitle(item.fileName))
+            if (item.subject) fd.append('subject', item.subject)
+            if (item.board) fd.append('board', item.board)
+          } else {
+            fd.append('bookId', bookId!)
+            fd.append('pageOffset', String(part.pageOffset))
+          }
 
-      const res = await fetch('/api/admin/books/upload', {
-        method: 'POST',
-        body: fd,
-        credentials: 'same-origin',
-        cache: 'no-store',
-      })
-      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
-      if (!res.ok) {
-        const msg =
-          typeof data.error === 'string' && data.error
-            ? data.error
-            : 'আপলোড করা গেল না, আবার চেষ্টা করো।'
-        throw new ApiError(
-          msg,
-          res.status,
-          typeof data.code === 'string' ? data.code : undefined,
-          data
-        )
+          const res = await fetch('/api/admin/books/upload', {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            cache: 'no-store',
+          })
+          const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+          if (!res.ok) {
+            const msg =
+              typeof data.error === 'string' && data.error
+                ? data.error
+                : 'আপলোড করা গেল না, আবার চেষ্টা করো।'
+            throw new ApiError(
+              msg,
+              res.status,
+              typeof data.code === 'string' ? data.code : undefined,
+              data
+            )
+          }
+          const r = data as unknown as UploadResult
+          if (i === 0) bookId = r.book.id
+          totalChunks += r.chunkCount ?? 0
+          if (!totalPages) totalPages = r.pageCount ?? 0
+        }
+
+        updateItem(item.id, {
+          status: 'done',
+          phase: null,
+          message: `${toBn(totalPages || splitPageCount)} পৃষ্ঠা · ${toBn(totalChunks)} চাঙ্ক${
+            parts.length > 1 ? ` (${toBn(parts.length)}টি অংশে ভাগ হয়েছে)` : ''
+          } — অটো-এমবেড চলছে!`,
+        })
+        await loadBooks()
+      } catch (e) {
+        updateItem(item.id, {
+          status: 'failed',
+          phase: null,
+          error: e instanceof ApiError ? e.message : 'আপলোড করা গেল না, আবার চেষ্টা করো।',
+        })
       }
-      const r = data as unknown as UploadResult
-      setUploadSuccess(
-        `"${r.book.title}" যোগ হয়েছে — ${toBn(r.pageCount)} পৃষ্ঠা থেকে ${toBn(
-          r.chunkCount
-        )}টি চাঙ্ক তৈরি হলো। এখন স্বয়ংক্রিয়ভাবে এমবেড হচ্ছে, তুমি কিছু করতে হবে না!`
-      )
-      clearFile()
-      setPdfSubject('')
-      setPdfBoard('')
-      await loadBooks()
-    } catch (e) {
-      setUploadError(e instanceof ApiError ? e.message : 'আপলোড করা গেল না, আবার চেষ্টা করো।')
+    },
+    [updateItem, loadBooks]
+  )
+
+  const runQueue = useCallback(async () => {
+    if (runningRef.current) return
+    runningRef.current = true
+    try {
+      for (;;) {
+        const next = queueRef.current.find((q) => q.status === 'waiting')
+        if (!next) break
+        await processItem(next)
+      }
     } finally {
-      setUploading(false)
+      runningRef.current = false
     }
+  }, [processItem])
+
+  function acceptFiles(list: FileList | File[] | null | undefined) {
+    if (!list || list.length === 0) return
+    const files = Array.from(list)
+    const items: QueueItem[] = []
+    for (const f of files) {
+      const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+      const base = {
+        id: newId(),
+        file: f,
+        fileName: f.name,
+        fileSize: f.size,
+        subject: pdfSubject,
+        board: pdfBoard.trim(),
+        phase: null,
+        message: null,
+        error: null,
+      }
+      if (!isPdf) {
+        items.push({ ...base, status: 'failed', error: 'শুধু PDF ফাইল দেওয়া যাবে।' })
+        continue
+      }
+      if (f.size > MAX_PDF_BYTES) {
+        items.push({ ...base, status: 'failed', error: 'ফাইল খুব বড় — সর্বোচ্চ ১৫০ MB আপলোড করা যাবে।' })
+        continue
+      }
+      items.push({ ...base, status: 'waiting' })
+    }
+    if (!items.length) return
+    setQueueBoth((prev) => [...prev, ...items])
+    void runQueue()
   }
 
-  // ---------- ম্যানুয়াল ফর্ম (আগের মতোই) ----------
+  function removeQueueItem(id: string) {
+    setQueueBoth((prev) => prev.filter((q) => q.id !== id))
+  }
+
+  function retryQueueItem(item: QueueItem) {
+    setQueueBoth((prev) => [
+      ...prev.filter((q) => q.id !== item.id),
+      { ...item, id: newId(), status: 'waiting', phase: null, message: null, error: null },
+    ])
+    void runQueue()
+  }
+
+  // ---------- ম্যানুয়াল ফর্ম ----------
   function addChapter() {
     setFormError(null)
     setSuccessMsg(null)
@@ -261,7 +361,9 @@ export function BooksTab() {
       setBoard('')
       setChapters([])
       setSuccessMsg(
-        `"${data.book.title}" সংরক্ষণ হয়েছে — ${toBn(data.book.chapters.length)}টি অধ্যায় যোগ হলো। এখন এমবেড করো!`
+        `"${data.book.title}" সংরক্ষণ হয়েছে — ${toBn(
+          data.book.chapters.length
+        )}টি অধ্যায় যোগ হলো। এখন স্বয়ংক্রিয়ভাবে এমবেড হচ্ছে, তুমি আর কিছু করতে হবে না!`
       )
       await loadBooks()
     } catch (e) {
@@ -329,9 +431,24 @@ export function BooksTab() {
     if (busyBookId === book.id) return 'এমবেড হচ্ছে...'
     const res = embedResult && embedResult.bookId === book.id ? embedResult : null
     if (res && res.remainingCount > 0) return 'আরও এমবেড করুন'
+    if (book.embedError) return 'আবার এমবেড করুন'
     if (bookAllEmbedded(book)) return 'সব এমবেডেড ✓'
     return 'এমবেড করুন'
   }
+
+  // তালিকার উপরের সামারি — মোট বই / অধ্যায় / চাঙ্ক
+  const totals = (books ?? []).reduce(
+    (acc, b) => {
+      acc.books += 1
+      for (const ch of b.chapters) {
+        acc.chapters += 1
+        acc.chunks += ch.chunkCount
+        acc.embedded += ch.embeddedCount
+      }
+      return acc
+    },
+    { books: 0, chapters: 0, chunks: 0, embedded: 0 }
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -347,7 +464,7 @@ export function BooksTab() {
               : 'text-emerald-700 hover:bg-emerald-100'
           }`}
         >
-          <FileUp className="h-4 w-4" />
+          <BookOpen className="h-4 w-4" />
           PDF আপলোড
         </button>
         <button
@@ -367,156 +484,203 @@ export function BooksTab() {
 
       {/* ---------- PDF আপলোড মোড ---------- */}
       {mode === 'pdf' && (
-        <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
-          <CardContent className="flex flex-col gap-4 p-4">
-            <div>
-              <h3 className="font-semibold text-stone-900">PDF আপলোড করো — বাকি সব অটোমেটিক!</h3>
-              <p className="mt-1 text-xs text-stone-500">
-                আপলোডের পর স্বয়ংক্রিয়ভাবে: টেক্সট বের হবে → অধ্যায় চেনা হবে → চাঙ্ক তৈরি হবে →
-                এমবেড হয়ে ডেটাবেসে জমা হবে। তোমাকে আর কিছুই করতে হবে না।
-              </p>
-            </div>
+        <>
+          <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+            <CardContent className="flex flex-col gap-4 p-4">
+              <div>
+                <h3 className="font-semibold text-stone-900">
+                  বই যোগ করো — টেনে আনো, বাকি সব অটোমেটিক!
+                </h3>
+                <p className="mt-1 text-xs text-stone-500">
+                  ড্রপ করলেই আপলোড শুরু হয় — একাধিক PDF একসাথে দেওয়া যায়, বড় বই নিজে থেকেই
+                  অংশে ভেঙে আপলোড হয় (সর্বোচ্চ ১৫০ MB)।
+                </p>
+              </div>
 
-            <div
-              role="button"
-              tabIndex={0}
-              aria-label="PDF ফাইল বাছো বা টেনে আনো"
-              onClick={() => !uploading && fileInputRef.current?.click()}
-              onKeyDown={(e) => {
-                if ((e.key === 'Enter' || e.key === ' ') && !uploading) {
+              {/* ৩-ধাপের গাইড */}
+              <ol className="grid gap-2 rounded-xl border border-emerald-100 bg-emerald-50/50 p-3 text-xs text-stone-600 sm:grid-cols-3">
+                <li className="flex items-start gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">
+                    ১
+                  </span>
+                  <span>
+                    বইয়ের PDF জোগাড় করো — NCTB-র সব ক্লাসের ফ্রি PDF:{' '}
+                    <span className="font-semibold text-emerald-700">nctb.gov.bd</span>
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">
+                    ২
+                  </span>
+                  <span>নিচে টেনে আনো বা ক্লিক করে বাছো — বিষয় দিতে চাইলে আগে নিচে সেট করো</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">
+                    ৩
+                  </span>
+                  <span>
+                    ব্যস! টেক্সট → অধ্যায় → এমবেড সব অটোমেটিক — শেষ হলে স্টুডেন্টরা বই থেকেই
+                    উত্তর পাবে
+                  </span>
+                </li>
+              </ol>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="pdf-subject" className="text-stone-700">
+                    বিষয় <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+                  </Label>
+                  <Select value={pdfSubject} onValueChange={setPdfSubject}>
+                    <SelectTrigger
+                      id="pdf-subject"
+                      className="h-11 w-full border-stone-200 focus-visible:ring-emerald-300"
+                    >
+                      <SelectValue placeholder="সাধারণ (ডিফল্ট)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SUBJECTS.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="pdf-board" className="text-stone-700">
+                    বোর্ড <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
+                  </Label>
+                  <Input
+                    id="pdf-board"
+                    value={pdfBoard}
+                    onChange={(e) => setPdfBoard(e.target.value)}
+                    placeholder="NCTB (ডিফল্ট)"
+                    className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+                  />
+                </div>
+              </div>
+
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label="PDF ফাইল বাছো বা টেনে আনো — একাধিক ফাইল দেওয়া যাবে"
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    fileInputRef.current?.click()
+                  }
+                }}
+                onDragOver={(e) => {
                   e.preventDefault()
-                  fileInputRef.current?.click()
-                }
-              }}
-              onDragOver={(e) => {
-                e.preventDefault()
-                if (!uploading) setDragging(true)
-              }}
-              onDragLeave={() => setDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault()
-                setDragging(false)
-                if (!uploading) acceptFile(e.dataTransfer.files?.[0])
-              }}
-              className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
-                dragging
-                  ? 'border-emerald-400 bg-emerald-50'
-                  : 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/pdf,.pdf"
-                className="hidden"
-                onChange={(e) => acceptFile(e.target.files?.[0])}
-                disabled={uploading}
-              />
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
-                {uploading ? (
-                  <Loader2 className="h-5 w-5 animate-spin text-emerald-700" />
-                ) : (
-                  <CloudUpload className="h-5 w-5 text-emerald-700" />
-                )}
-              </div>
-              {uploading ? (
-                <>
-                  <p className="text-sm font-semibold text-emerald-800">বই পড়া হচ্ছে…</p>
-                  <p className="text-xs text-stone-500">টেক্সট → অধ্যায় → চাঙ্ক তৈরি চলছে</p>
-                </>
-              ) : file ? (
-                <>
-                  <p className="max-w-full truncate px-2 text-sm font-semibold text-emerald-800">
-                    {file.name}
-                  </p>
-                  <p className="text-xs text-stone-500">{formatSize(file.size)} — আপলোড করতে নিচের বাটন চাপো</p>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-semibold text-emerald-800">
-                    PDF ফাইল এখানে টেনে আনো, অথবা ক্লিক করে বাছো
-                  </p>
-                  <p className="text-xs text-stone-500">সর্বোচ্চ ১৫০ MB — টেক্সট-ভিত্তিক PDF (স্ক্যান করা ছবি নয়)</p>
-                </>
-              )}
-            </div>
-
-            {file && !uploading && (
-              <div className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-stone-50/70 p-3">
-                <FileText className="h-4 w-4 shrink-0 text-emerald-600" />
-                <span className="min-w-0 flex-1 truncate text-sm text-stone-700">{file.name}</span>
-                <span className="shrink-0 text-xs text-stone-400">{formatSize(file.size)}</span>
-                <button
-                  type="button"
-                  onClick={clearFile}
-                  aria-label="ফাইল বাদ দাও"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-stone-400 hover:bg-stone-200 hover:text-stone-600"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            )}
-
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="pdf-subject" className="text-stone-700">
-                  বিষয় <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
-                </Label>
-                <Select value={pdfSubject} onValueChange={setPdfSubject}>
-                  <SelectTrigger
-                    id="pdf-subject"
-                    className="h-11 w-full border-stone-200 focus-visible:ring-emerald-300"
-                  >
-                    <SelectValue placeholder="সাধারণ (ডিফল্ট)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SUBJECTS.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="pdf-board" className="text-stone-700">
-                  বোর্ড <span className="font-normal text-stone-400">(ঐচ্ছিক)</span>
-                </Label>
-                <Input
-                  id="pdf-board"
-                  value={pdfBoard}
-                  onChange={(e) => setPdfBoard(e.target.value)}
-                  placeholder="NCTB (ডিফল্ট)"
-                  className="h-11 border-stone-200 focus-visible:ring-emerald-300"
+                  setDragging(true)
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setDragging(false)
+                  acceptFiles(e.dataTransfer.files)
+                }}
+                className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition-colors ${
+                  dragging
+                    ? 'border-emerald-400 bg-emerald-50'
+                    : 'border-emerald-200 bg-emerald-50/40 hover:bg-emerald-50'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="application/pdf,.pdf"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    acceptFiles(e.target.files)
+                    e.target.value = ''
+                  }}
                 />
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+                  <CloudUpload className="h-5 w-5 text-emerald-700" />
+                </div>
+                <p className="text-sm font-semibold text-emerald-800">
+                  এখানে PDF টেনে আনো, অথবা ক্লিক করে বাছো
+                </p>
+                <p className="text-xs text-stone-500">
+                  একাধিক PDF একসাথে চলবে · ছোট-বড় সব বই অটো-প্রসেস হবে · টেক্সট-ভিত্তিক PDF দাও
+                  (স্ক্যান করা ছবি নয়)
+                </p>
               </div>
-            </div>
 
-            {uploadError && (
-              <Alert variant="destructive" className="rounded-xl border-rose-200 bg-rose-50">
-                <AlertDescription className="text-rose-700">{uploadError}</AlertDescription>
-              </Alert>
-            )}
-            {uploadSuccess && (
-              <Alert className="rounded-xl border-emerald-200 bg-emerald-50">
-                <AlertDescription className="text-emerald-800">{uploadSuccess}</AlertDescription>
-              </Alert>
-            )}
-
-            <Button
-              type="button"
-              onClick={() => void handleUpload()}
-              disabled={!file || uploading}
-              className="h-11 w-full bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 sm:w-fit sm:px-6"
-            >
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileUp className="h-4 w-4" />}
-              {uploading ? 'প্রসেস হচ্ছে...' : 'PDF আপলোড করো'}
-            </Button>
-          </CardContent>
-        </Card>
+              {/* আপলোড কিউ — প্রতিটা ফাইলের লাইভ স্টেটাস */}
+              {queue.length > 0 && (
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {queue.map((q) => (
+                    <div
+                      key={q.id}
+                      className={`flex items-start gap-2.5 rounded-xl border p-3 ${
+                        q.status === 'failed'
+                          ? 'border-rose-200 bg-rose-50/60'
+                          : q.status === 'done'
+                            ? 'border-emerald-200 bg-emerald-50/60'
+                            : 'border-emerald-100 bg-stone-50/70'
+                      }`}
+                    >
+                      <span className="mt-0.5 shrink-0">
+                        {q.status === 'working' ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />
+                        ) : q.status === 'done' ? (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        ) : q.status === 'failed' ? (
+                          <XCircle className="h-4 w-4 text-rose-600" />
+                        ) : (
+                          <FileText className="h-4 w-4 text-stone-400" />
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-stone-800">{q.fileName}</p>
+                        <p className="mt-0.5 text-xs text-stone-500">
+                          {formatSize(q.fileSize)}
+                          {q.subject ? ` · ${q.subject}` : ''}
+                        </p>
+                        {q.status === 'working' && q.phase && (
+                          <p className="mt-1 text-xs font-medium text-emerald-700">{q.phase}</p>
+                        )}
+                        {q.status === 'done' && q.message && (
+                          <p className="mt-1 text-xs font-medium text-emerald-700">{q.message}</p>
+                        )}
+                        {q.status === 'failed' && q.error && (
+                          <p className="mt-1 text-xs font-medium text-rose-700">{q.error}</p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        {q.status === 'failed' && (
+                          <button
+                            type="button"
+                            onClick={() => retryQueueItem(q)}
+                            aria-label="আবার চেষ্টা করো"
+                            className="flex h-8 w-8 items-center justify-center rounded-full text-rose-600 hover:bg-rose-100"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => removeQueueItem(q.id)}
+                          aria-label="তালিকা থেকে বাদ দাও"
+                          className="flex h-8 w-8 items-center justify-center rounded-full text-stone-400 hover:bg-stone-200 hover:text-stone-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
       )}
 
-      {/* ---------- ম্যানুয়াল মোড (আগের ফর্ম) ---------- */}
+      {/* ---------- ম্যানুয়াল মোড ---------- */}
       {mode === 'manual' && (
         <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
           <CardContent className="flex flex-col gap-4 p-4">
@@ -698,6 +862,26 @@ export function BooksTab() {
         </Alert>
       )}
 
+      {/* সামারি চিপস */}
+      {books !== null && books.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-stone-600">
+          <Badge variant="outline" className="rounded-full border-emerald-200 bg-white">
+            মোট বই: {toBn(totals.books)}
+          </Badge>
+          <Badge variant="outline" className="rounded-full border-emerald-200 bg-white">
+            অধ্যায়: {toBn(totals.chapters)}
+          </Badge>
+          <Badge variant="outline" className="rounded-full border-emerald-200 bg-white">
+            এমবেডেড চাঙ্ক: {toBn(totals.embedded)}/{toBn(totals.chunks)}
+          </Badge>
+          {totals.chunks > 0 && totals.embedded >= totals.chunks && (
+            <Badge className="rounded-full border-emerald-200 bg-emerald-100 text-emerald-800">
+              নলেজবেস রেডি ✓
+            </Badge>
+          )}
+        </div>
+      )}
+
       {books === null && !listError ? (
         <div className="flex flex-col gap-2">
           {[0, 1].map((i) => (
@@ -706,7 +890,7 @@ export function BooksTab() {
         </div>
       ) : books !== null && books.length === 0 ? (
         <p className="rounded-2xl border border-dashed border-emerald-200 bg-white p-6 text-center text-sm text-stone-500">
-          এখনো কোনো বই নেই — উপরে PDF আপলোড করে প্রথম বই যোগ করো, বাকি সব অটোমেটিক হবে!
+          এখনো কোনো বই নেই — উপরে PDF টেনে আনো, বাকি সব অটোমেটিক হবে!
         </p>
       ) : books !== null ? (
         <div className="flex flex-col gap-4">
@@ -747,6 +931,15 @@ export function BooksTab() {
                       {confirmId === book.id ? 'নিশ্চিত?' : <Trash2 className="h-4 w-4" />}
                     </Button>
                   </div>
+
+                  {/* অটো-এমবেড থেমে গেলে কারণ দেখাও — আর চুপচাপ নয় */}
+                  {book.embedError && !book.autoEmbedding && (
+                    <Alert className="mt-3 rounded-xl border-amber-200 bg-amber-50">
+                      <AlertDescription className="text-xs text-amber-800">
+                        ⚠️ {book.embedError}
+                      </AlertDescription>
+                    </Alert>
+                  )}
 
                   <div className="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
                     {book.chapters.map((ch) => {

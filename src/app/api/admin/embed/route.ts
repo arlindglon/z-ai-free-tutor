@@ -69,6 +69,10 @@ export async function POST(req: NextRequest) {
 
     invalidateChunkCache()
     const remainingCount = await db.chunk.count({ where })
+    // চলন্ত বইয়ের পুরনো থেমে-যাওয়ার কারণ মুছে দাও — এখন আবার চলছে
+    if (bookId) {
+      await db.book.update({ where: { id: bookId }, data: { embedError: null } }).catch(() => {})
+    }
     return NextResponse.json({ embeddedCount: done, remainingCount })
   } catch (e) {
     invalidateChunkCache()

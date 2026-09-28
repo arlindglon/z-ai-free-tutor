@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
 import { chunkContent, estimatePage } from '@/lib/chunk'
 import { invalidateChunkCache } from '@/lib/rag'
-import { isAutoEmbedding } from '@/lib/book-jobs'
+import { isAutoEmbedding, startAutoEmbed } from '@/lib/book-jobs'
 
 async function requireAdmin() {
   const user = await getSessionUser()
@@ -46,6 +47,7 @@ export async function GET() {
       subject: b.subject,
       board: b.board,
       autoEmbedding: isAutoEmbedding(b.id),
+      embedError: b.embedError,
       chapters: b.chapters.map((c) => ({
         id: c.id,
         title: c.title,
@@ -120,12 +122,20 @@ export async function POST(req: NextRequest) {
   })
 
   invalidateChunkCache()
+
+  // সেভ করলেই অটো-এমবেড শুরু — ম্যানুয়াল বইয়েও আর আলাদা "এমবেড করুন" চাপতে হয় না
+  after(async () => {
+    startAutoEmbed(book.id)
+  })
+
   return NextResponse.json({
     book: {
       id: book.id,
       title: book.title,
       subject: book.subject,
       board: book.board,
+      autoEmbedding: true,
+      embedError: null,
       chapters: book.chapters.map((c) => ({
         id: c.id,
         title: c.title,

@@ -62,12 +62,13 @@ model Setting {
 }
 
 model Book {
-  id        String    @id @default(cuid())
-  title     String
-  subject   String
-  board     String?
-  createdAt DateTime  @default(now())
-  chapters  Chapter[]
+  id         String    @id @default(cuid())
+  title      String
+  subject    String
+  board      String?
+  embedError String? // অটো-এমবেড থেমে গেলে কারণ (কী নেই / জিও-ব্লক / রেট-লিমিট) — null মানে সব ঠিক
+  createdAt  DateTime  @default(now())
+  chapters   Chapter[]
 }
 
 model Chapter {
