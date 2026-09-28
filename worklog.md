@@ -379,3 +379,24 @@ Stage Summary:
 - RAG লক এখন ৩ স্তরে কড়া: (১) বিষয় বইয়ে নেই → প্রশ্ন মডেলের কাছেই যায় না, (২) কঠোর প্রোটোকল-প্রম্পট, (৩) উত্তরের লেক্সিক্যাল grounding যাচাই — মিললেই প্রত্যাখ্যান, এমনকি তথ্যটা সত্যি হলেও (লক = "শুধু বই থেকে")
 - ভারসাম্য: grounded উত্তর ৫৩%+, hallucination ~৩১-৩৭% — থ্রেশহোল্ড ৪৫% দুটোর মাঝে; প্রোডাকশনে ভালো OCR বইয়ে grounded আরও উঁচুতে থাকবে
 - ফাইল: src/lib/rag.ts (RAG_REFUSAL_TEXT, RAG_UNGROUNDED_TEXT, bookCoverage, answerGroundedInBook), src/lib/gemini.ts (🔒 প্রোটোকল), src/app/api/chat/route.ts (গেট ১+২, admin-refund ফিক্স), src/components/tutor/admin/settings-tab.tsx
+
+---
+Task ID: 16
+Agent: main (Z.ai Code)
+Task: বই যোগ করার সিস্টেম সহজ করা (easy book-adding upgrade) — user: "boi add korbo kivabe easy vabe system aro uprade koro boi add korar jonne"
+
+Work Log:
+- Exploration (Explore agent): পুরো book/RAG পাইপলাইন ম্যাপ করা — আবিষ্কার: PDF upload route (/api/admin/books/upload) commit 334e06e-এ ভুলে মুছে গিয়েছিল → 404, শুধু ম্যানুয়াল পেস্ট-টেক্সট পাথ কাজ করত
+- Upload route git থেকে পুনরুদ্ধার (git show 334e06e~1) এবং multi-part append support যোগ (bookId + pageOffset form fields — স্প্লিট অংশ একই বইয়ে জোড়া লাগে, পৃষ্ঠা নম্বর গ্লোবাল সঠিক থাকে; অ্যাপেন্ড মোডে ফেইল হলে শুধু নতুন অধ্যায় রোলব্যাক; "সম্পূর্ণ বই" ফলব্যাক টাইটেল → "পৃষ্ঠা X–Y")
+- নতুন src/lib/pdf-split.ts: ব্রাউজারে pdf-lib দিয়ে >3MB PDF পাতা-ধরে ≤3MB অংশে ভাঙা (adaptive size verify — অংশ বড় হলে পাতা কমিয়ে re-save), pageOffset ট্র্যাকিং, ফেইল হলে পুরো ফাইল ফলব্যাক (সার্ভারের নির্ভুল এররের উপর ভরসা)
+- books-tab.tsx রিরাইট: মাল্টি-ফাইল ড্রপজোন (multiple) → কিউ (waiting/working/done/failed) ড্রপ করলেই অটো-স্টার্ট, প্রতি ফাইলে লাইভ ফেজ ("অংশ ৩/৮ আপলোড হচ্ছে…"), ফেইল হলে রিট্রাই বাটন, ৩-ধাপের গাইড (nctb.gov.bd সোর্স সহ), বই/অধ্যায়/চাঙ্ক সামারি চিপস
+- ম্যানুয়াল বই POST-এ after(() => startAutoEmbed()) — সেভ করলেই এমবেড, সাকসেস মেসেজ আপডেট
+- Book.embedError String? (দুই স্কিমায়) + book-jobs.ts-এ থামার কারণ সেভ (NO_KEYS/GEO_BLOCKED/KEY_POOL_EXHAUSTED → বাংলা মেসেজ), সফল রানে ক্লিয়ার; embed route সাকসেসে ক্লিয়ার; books GET-এ ফিল্ড; UI-তে অ্যাম্বার অ্যালার্ট + "আবার এমবেড করুন" লেবেল
+- E2E (agent-browser): 4.85MB টেস্ট PDF (noise-PNG + unique text, 80 পাতা) → অটো-স্প্লিট → ৪০ অংশ পরপর আপলোড → বই সঠিক (৪০ অধ্যায়, ২৩১২ চাঙ্ক, পৃষ্ঠা ১–৮০ গ্লোবাল ক্রমিক); ২টি ছোট PDF একসাথে → ফাস্ট পাথ ✓; ম্যানুয়াল বই → অটো-এমবেড ✓; embedError অ্যাম্বার অ্যালার্ট + রিট্রাই এরর দৃশ্যমান ✓; দুই-ক্লিক ডিলিট ✓; মোবাইল 375px ওভারফ্লো নেই ✓; কনসোল এরর শূন্য ✓
+- নোট: dev সার্ভার রিস্টার্ট দরকার হয়েছিল (স্কিমা চেঞ্জের পরে Prisma client রিজেন — রানিং সার্ভারে পুরনো client থেকে যায়)
+- টেস্ট PDF জেনারেটর: /home/z/.testtmp/gen-pdf.cjs (noise PNG → কম্প্রেশন-প্রুফ বড় PDF)
+
+Stage Summary:
+- বই যোগ করা এখন ৩-ধাপে: PDF নামাও (NCTB) → টেনে আনো (একাধিক একসাথে) → ব্যস, সব অটোমেটিক (টেক্সট→অধ্যায়→চাঙ্ক→এমবেড)
+- Vercel-এর 4.5MB বডি লিমিট ক্লায়েন্ট-সাইড স্প্লিটে সমাধান — প্রোডাকশনে বড় NCTB বই এখন আপলোড হবে
+- commit f68fb70 pushed → Vercel auto-deploy
