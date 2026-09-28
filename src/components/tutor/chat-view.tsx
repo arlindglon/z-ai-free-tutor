@@ -146,6 +146,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
               role: 'tutor',
               text: m.answer,
               references: m.references ?? undefined,
+              answerTag: m.answerTag ?? undefined,
             })
           }
         }
@@ -233,6 +234,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
                     data.references && data.references.length > 0
                       ? data.references
                       : undefined,
+                  answerTag: data.answerTag ?? undefined,
                 }
               : m,
           ),

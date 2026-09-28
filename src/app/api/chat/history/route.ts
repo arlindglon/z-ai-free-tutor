@@ -18,6 +18,7 @@ export async function GET() {
       id: r.id,
       question: r.question,
       answer: r.answer,
+      answerTag: r.answerTag,
       references: r.references,
       createdAt: r.createdAt.toISOString(),
     })),

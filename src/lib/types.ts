@@ -23,6 +23,8 @@ export type BookReference = {
 export type ChatApiResponse = {
   id: string
   answer: string
+  /** উত্তরের স্বাক্ষর — ইঞ্জিনের পুল থেকে র‍্যান্ডম নাম/কোড (অ্যাডমিন সেট করলেই আসবে) */
+  answerTag?: string | null
   references: BookReference[]
   credits: Credits
   engine?: 'gemini' | 'zai'
@@ -32,6 +34,7 @@ export type HistoryMessage = {
   id: string
   question: string
   answer: string | null
+  answerTag?: string | null
   references: BookReference[] | null
   createdAt: string
 }
@@ -86,4 +89,9 @@ export type SettingsInfo = {
   zaiEnabled: boolean
   /** মূল ইঞ্জিন ফেইল করলে অন্য ইঞ্জিন অটো-চেষ্টা হবে কি না */
   fallbackEnabled: boolean
+  /** উত্তরের স্বাক্ষর পুল — প্রতি লাইনে একটা নাম/কোড */
+  tagNameGemini: string
+  tagNameZai: string
+  /** RAG লক — চালু থাকলে শুধু বইয়ের রেফারেন্স থেকেই উত্তর দেবে */
+  ragOnlyMode: boolean
 }

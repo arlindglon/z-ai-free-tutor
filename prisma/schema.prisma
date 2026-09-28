@@ -101,6 +101,7 @@ model Question {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   question   String
   answer     String?
+  answerTag  String?
   references Json?
   createdAt  DateTime @default(now())
   @@index([userId, createdAt])

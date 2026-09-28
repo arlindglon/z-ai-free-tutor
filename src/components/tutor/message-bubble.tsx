@@ -16,6 +16,8 @@ export interface MessageBubbleData {
   role: 'user' | 'tutor' | 'system'
   text: string
   references?: BookReference[]
+  /** উত্তরের স্বাক্ষর — ইঞ্জিনের পুল থেকে র‍্যান্ডম নাম/কোড */
+  answerTag?: string
 }
 
 export interface MessageBubbleProps {
@@ -179,16 +181,27 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </ReactMarkdown>
         </div>
         <ReferenceChips references={message.references ?? []} />
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={handleSpeak}
-          aria-label={speaking ? 'পড়া বন্ধ করো' : 'উত্তর পড়ে শোনাও'}
-          className="mt-2 h-9 w-9 rounded-full border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
-        >
-          {speaking ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-        </Button>
+        <div className="mt-2 flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={handleSpeak}
+            aria-label={speaking ? 'পড়া বন্ধ করো' : 'উত্তর পড়ে শোনাও'}
+            className="h-9 w-9 rounded-full border-emerald-200 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+          >
+            {speaking ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+          </Button>
+          {/* স্বাক্ষর — অ্যাডমিন পুল থেকে র‍্যান্ডম নাম/কোড; স্টুডেন্টের কাছে রহস্যময় সাইন, অ্যাডমিন বুঝবে কোন ইঞ্জিন */}
+          {message.answerTag && (
+            <span
+              title="উত্তর স্বাক্ষর"
+              className="rounded-full border border-stone-200 bg-stone-50 px-2.5 py-0.5 font-mono text-[11px] text-stone-400"
+            >
+              ✍ {message.answerTag}
+            </span>
+          )}
+        </div>
       </div>
     </motion.div>
   )

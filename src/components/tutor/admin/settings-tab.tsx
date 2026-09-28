@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Cpu, Loader2, Save, Sparkles } from 'lucide-react'
+import { Bot, Cpu, Loader2, Lock, PenLine, Save, Sparkles } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { api, ApiError } from '@/lib/api'
 import type { EngineId, SettingsInfo } from '@/lib/types'
 
@@ -23,6 +24,10 @@ export function SettingsTab() {
   const [geminiEnabled, setGeminiEnabled] = useState(true)
   const [zaiEnabled, setZaiEnabled] = useState(true)
   const [fallbackEnabled, setFallbackEnabled] = useState(true)
+  // উত্তরের স্বাক্ষর পুল + RAG লক
+  const [tagNameGemini, setTagNameGemini] = useState('')
+  const [tagNameZai, setTagNameZai] = useState('')
+  const [ragOnlyMode, setRagOnlyMode] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +45,9 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
+      setTagNameGemini(data.settings.tagNameGemini ?? '')
+      setTagNameZai(data.settings.tagNameZai ?? '')
+      setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setError(null)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'সেটিংস আনা গেল না, আবার চেষ্টা করো।')
@@ -90,6 +98,9 @@ export function SettingsTab() {
           geminiEnabled,
           zaiEnabled,
           fallbackEnabled,
+          tagNameGemini,
+          tagNameZai,
+          ragOnlyMode,
         },
       })
       setChatModel(data.settings.chatModel)
@@ -99,6 +110,9 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
+      setTagNameGemini(data.settings.tagNameGemini ?? '')
+      setTagNameZai(data.settings.tagNameZai ?? '')
+      setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setSaved(true)
       if (hideTimer.current) clearTimeout(hideTimer.current)
       hideTimer.current = setTimeout(() => setSaved(false), SUCCESS_HIDE_MS)
@@ -224,6 +238,93 @@ export function SettingsTab() {
               নোট: বই-খোঁজার এমবেডিং সবসময় Gemini দিয়ে হয় — জেমিনাই ইঞ্জিন বন্ধ থাকলে লেক্সিকাল সার্চ চলবে।
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* উত্তরের স্বাক্ষর (মডেল মার্ক) */}
+      <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-4">
+          <div className="flex items-center gap-2">
+            <PenLine className="h-4 w-4 text-emerald-600" />
+            <p className="text-sm font-semibold text-stone-800">উত্তরের স্বাক্ষর (কোন ইঞ্জিন উত্তর দিয়েছে)</p>
+          </div>
+          <p className="text-xs leading-relaxed text-stone-500">
+            প্রতিটা লাইনে একটা করে নাম/কোড লেখো — যত খুশি লাইন যোগ করতে পারো। উত্তর দেওয়ার সময়
+            যে ইঞ্জিন উত্তর দিয়েছে, তার তালিকা থেকে র‍্যান্ডম একটা নাম বেছে উত্তরের নিচে দেখাবে।
+            স্টুডেন্টরা নামটা দেখে বুঝবে না কী, কিন্তু তুমি জানবে — এই নাম = এই ইঞ্জিন। 😎
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="tag-gemini" className="text-stone-700">
+                জেমিনাই ইঞ্জিনের নাম/কোড
+              </Label>
+              <Textarea
+                id="tag-gemini"
+                value={tagNameGemini}
+                onChange={(e) => {
+                  setTagNameGemini(e.target.value)
+                  markEdited()
+                }}
+                placeholder={'রবিন\nG-7\nসূর্য স্যার'}
+                rows={5}
+                className="min-h-24 border-stone-200 text-sm focus-visible:ring-emerald-300"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="tag-zai" className="text-stone-700">
+                Z.ai GLM ইঞ্জিনের নাম/কোড
+              </Label>
+              <Textarea
+                id="tag-zai"
+                value={tagNameZai}
+                onChange={(e) => {
+                  setTagNameZai(e.target.value)
+                  markEdited()
+                }}
+                placeholder={'সাগর\nZ-9\nচাঁদ স্যার'}
+                rows={5}
+                className="min-h-24 border-stone-200 text-sm focus-visible:ring-emerald-300"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-stone-400">
+            দুই তালিকাই খালি রাখলে উত্তরে কোনো স্বাক্ষর দেখাবে না।
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* RAG লক — শুধু বই থেকে উত্তর */}
+      <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-4">
+          <div className="flex items-center gap-2">
+            <Lock className="h-4 w-4 text-emerald-600" />
+            <p className="text-sm font-semibold text-stone-800">শুধু বই থেকে উত্তর (RAG লক)</p>
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-stone-800">
+                মডেল কেবল তোমার দেওয়া তথ্য (আপলোড করা বই) থেকেই উত্তর করবে
+              </p>
+              <p className="text-xs leading-relaxed text-stone-500">
+                চালু থাকলে মডেল নিজের মাথা থেকে বাইরের কোনো তথ্য দিতে পারবে না — বইয়ে উত্তর না
+                থাকলে বলবে &quot;এই প্রশ্নের উত্তর পাঠ্যবইয়ে পাইনি 📖&quot;। ভুল তথ্য বা
+                হ্যালুসিনেশনের ঝুঁকি প্রায় শূন্য হয়ে যায়।
+              </p>
+            </div>
+            <Switch
+              checked={ragOnlyMode}
+              onCheckedChange={(v) => {
+                setRagOnlyMode(v)
+                markEdited()
+              }}
+              aria-label="শুধু বই থেকে উত্তর (RAG লক) চালু/বন্ধ"
+              className="data-[state=checked]:bg-emerald-600"
+            />
+          </div>
+          <p className="text-xs text-stone-400">
+            বন্ধ থাকলে বইয়ে উত্তর না পেলে মডেল নিজের জ্ঞান থেকেও উত্তর দেয় (বইয়ের বাইরের তথ্য
+            বলে জানিয়ে দেয়)।
+          </p>
         </CardContent>
       </Card>
 

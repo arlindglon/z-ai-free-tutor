@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, safeUser, unauthorized } from '@/lib/session'
-import { getSettings } from '@/lib/settings'
+import { getSettings, pickTagName } from '@/lib/settings'
 import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
 import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
@@ -78,7 +78,8 @@ export async function POST(req: NextRequest) {
       : `=== শিক্ষার্থীর প্রশ্ন ===\n${question}`
 
     // ৫) কী-পুল থেকে জেমিনাই (429 অটো-ফেইলওভার), ফেইল হলে z-ai — স্টুডেন্ট সবসময় উত্তর পাবে
-    const result = await generateTutorAnswer(prompt, buildSystemPrompt(), settings)
+    // RAG লক চালু থাকলে সিস্টেম প্রম্পট শুধু বইয়ের রেফারেন্সে সীমাবদ্ধ থাকে
+    const result = await generateTutorAnswer(prompt, buildSystemPrompt({ ragOnly: settings.ragOnlyMode }), settings)
 
     if (result.blocked || !result.text.trim()) {
       await refundCredit(user.id).catch(() => {})
@@ -97,14 +98,19 @@ export async function POST(req: NextRequest) {
       snippet: r.snippet,
     }))
 
-    // ৬) হিস্ট্রিতে সেভ
+    // ৬) উত্তর যে ইঞ্জিন দিয়েছে তার স্বাক্ষর পুল থেকে র‍্যান্ডম নাম — স্টুডেন্ট নাম দেখবে,
+    // অ্যাডমিন জানবে কোন ইঞ্জিন উত্তর দিয়েছে (পুল খালি হলে স্বাক্ষর যোগ হয় না)
+    const answerTag = pickTagName(result.engine === 'zai' ? settings.tagNameZai : settings.tagNameGemini)
+
+    // ৭) হিস্ট্রিতে সেভ
     const row = await db.question.create({
-      data: { userId: user.id, question, answer: result.text, references },
+      data: { userId: user.id, question, answer: result.text, answerTag, references },
     })
 
     return NextResponse.json({
       id: row.id,
       answer: result.text,
+      answerTag,
       references,
       credits: { used, limit: user.role === 'admin' ? 0 : settings.dailyCredits },
       engine: result.engine,
