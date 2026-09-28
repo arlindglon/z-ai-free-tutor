@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, ApiError } from '@/lib/api'
+import { detectKeyEngine } from '@/lib/key-format'
 import type { ApiKeyInfo, EngineId } from '@/lib/types'
 
 const ENGINE_LABEL: Record<EngineId, string> = { gemini: 'জেমিনাই', zai: 'Z.ai GLM' }
@@ -71,7 +72,9 @@ export function KeysTab() {
       setShowKey(false)
       await loadKeys()
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : 'কী যোগ করা গেল না, আবার চেষ্টা করো।')
+      setActionError(
+        err instanceof ApiError ? err.message : 'নেটওয়ার্ক সমস্যা — ইন্টারনেট চেক করে আবার চেষ্টা করো।'
+      )
     } finally {
       setAdding(false)
     }
@@ -171,7 +174,12 @@ export function KeysTab() {
                   <Input
                     id="key-value"
                     value={keyValue}
-                    onChange={(e) => setKeyValue(e.target.value)}
+                    onChange={(e) => {
+                      setKeyValue(e.target.value)
+                      // কী-এর আকৃতি দেখে ইঞ্জিন অটো-বাছাই — ভুল ড্রপডাউনে আর আটকাবে না
+                      const detected = detectKeyEngine(e.target.value)
+                      if (detected) setEngine(detected)
+                    }}
                     placeholder={engine === 'zai' ? 'Z.ai key পেস্ট করো' : 'AIzaSy... পেস্ট করো'}
                     type={showKey ? 'text' : 'password'}
                     autoComplete="off"
