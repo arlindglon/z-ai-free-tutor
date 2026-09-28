@@ -6,7 +6,7 @@ import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
 import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
 import { pickModelAlias, resolveAliasTarget } from '@/lib/models'
-import { retrieveTopK, retrieveTopKLexical } from '@/lib/rag'
+import { retrieveTopK, retrieveTopKLexical, RAG_REFUSAL_TEXT, RAG_UNGROUNDED_TEXT, answerGroundedInBook, bookCoverage } from '@/lib/rag'
 import { GeminiError, isTransientAiError } from '@/lib/keypool'
 
 /**
@@ -65,6 +65,33 @@ export async function POST(req: NextRequest) {
       refs = await retrieveTopKLexical(question, subject, 3)
     }
 
+    // 🔒 RAG লক — গেট ১ (ডিটারমিনিস্টিক): বইয়ের কোনো অংশ না মিললে প্রশ্ন মডেলের কাছেই যাবে না —
+    // নইলে ফ্রি ফ্ল্যাশ মডেল নিজের মাথা থেকে উত্তর দিয়ে ফেলে (প্রম্পট-নিয়ম ignore করে)।
+    // ক্রেডিট ফেরত + হিস্ট্রিতে স্বাভাবিক টিউটর-বার্তা হিসেবে সেভ — স্টুডেন্ট কোনো এরর দেখে না।
+    if (settings.ragOnlyMode && refs.length === 0) {
+      if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
+      const row = await db.question.create({
+        data: {
+          userId: user.id,
+          question,
+          answer: RAG_REFUSAL_TEXT,
+          answerTag: null,
+          references: [],
+        },
+      })
+      return NextResponse.json({
+        id: row.id,
+        answer: RAG_REFUSAL_TEXT,
+        answerTag: null,
+        references: [],
+        credits: {
+          used: user.role === 'admin' ? used : Math.max(0, used - 1),
+          limit: user.role === 'admin' ? 0 : settings.dailyCredits,
+        },
+        user: safeUser(user),
+      })
+    }
+
     // ৪) প্রম্পট তৈরি (বইয়ের কনটেক্সটসহ)
     const context = refs.length
       ? refs
@@ -90,13 +117,45 @@ export async function POST(req: NextRequest) {
     )
 
     if (result.blocked || !result.text.trim()) {
-      await refundCredit(user.id).catch(() => {})
+      if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
       return NextResponse.json(
         {
           error: 'এই প্রশ্নের উত্তর দেওয়া সম্ভব হয়নি (সেফটি ফিল্টার)। অন্যভাবে প্রশ্নটা করে দেখো।',
         },
         { status: 422 }
       )
+    }
+
+    // 🔒 RAG লক — গেট ২ (উত্তর-কনট্রাক্ট যাচাই): পরিষ্কার প্রত্যাখ্যান হলে বৈধ; নইলে উত্তরের
+    // কনটেন্ট-শব্দ আসলে refs-এ আছে কি না (লেক্সিক্যাল grounding)। মডেল ভুয়া উত্তরের শেষে
+    // ফুটারও লাগিয়ে দিতে পারে — তাই শুধু ফুটার-চেক যথেষ্ট নয় (লাইভ টেস্টে প্রমাণিত)।
+    // ফাঁস ধরা পড়লে বদলে নির্দিষ্ট প্রত্যাখ্যান দাও। ক্রেডিট ফেরত।
+    if (settings.ragOnlyMode && !answerGroundedInBook(result.text, refs)) {
+      console.warn(
+        `[chat] RAG-lock violation: কভারেজ ${(bookCoverage(result.text, refs) * 100).toFixed(0)}% (থ্রেশহোল্ড ৪৫%) — উত্তরে বইয়ের রেফারেন্স নেই → প্রত্যাখ্যান দেওয়া হলো। ফাঁস করা অংশ:`,
+        result.text.slice(0, 300)
+      )
+      if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
+      const row = await db.question.create({
+        data: {
+          userId: user.id,
+          question,
+          answer: RAG_UNGROUNDED_TEXT,
+          answerTag: null,
+          references: [],
+        },
+      })
+      return NextResponse.json({
+        id: row.id,
+        answer: RAG_UNGROUNDED_TEXT,
+        answerTag: null,
+        references: [],
+        credits: {
+          used: user.role === 'admin' ? used : Math.max(0, used - 1),
+          limit: user.role === 'admin' ? 0 : settings.dailyCredits,
+        },
+        user: safeUser(user),
+      })
     }
 
     const references = refs.map((r) => ({
@@ -133,8 +192,8 @@ export async function POST(req: NextRequest) {
       user: safeUser(user),
     })
   } catch (e) {
-    // জেমিনাই/উত্তর ফেইল = ক্রেডিট ফেরত
-    await refundCredit(user.id).catch(() => {})
+    // ইঞ্জিন/উত্তর ফেইল = ক্রেডিট ফেরত (অ্যাডমিন খরচই করে নি — তার কোটা কমানো উচিত নয়)
+    if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
 
     if (e instanceof GeminiError) {
       if (e.message === 'NO_KEYS' || e.message === 'NO_ENGINES_ENABLED') {

@@ -119,6 +119,118 @@ const STOPWORDS = new Set([
   'কারা', 'কাকে', 'দেখাও', 'জানাও', 'স্যার', 'please', 'is', 'are', 'the', 'what', 'how',
 ])
 
+/* ------------------------------------------------------------------ */
+/* RAG লক (শুধু বই থেকে উত্তর) — সার্ভার-সাইড কঠোর এনফোর্সমেন্ট            */
+/* ------------------------------------------------------------------ */
+
+/** RAG লকে বইয়ের বাইরের প্রশ্নে ঠিক এই বাক্যটাই যাবে — মডেল কল ছাড়াই (১০০% লিক-প্রুফ) */
+export const RAG_REFUSAL_TEXT =
+  'এই প্রশ্নের উত্তর পাঠ্যবইয়ে (আপলোড করা বইগুলোতে) পাইনি 📖 — বইয়ের কোনো প্রশ্ন করো, অথবা অ্যাডমিনকে বইটি যোগ করতে বলো।'
+
+/** গেট ২: মডেলের উত্তর বই থেকে এসেছে কি না যাচাই না হলে — এই বার্তাটাই যাবে */
+export const RAG_UNGROUNDED_TEXT =
+  'এই প্রশ্নের নির্ভরযোগ্য উত্তর পাঠ্যবইয়ের (আপলোড করা বইয়ের) ভেতরে পাইনি 📖 — বইয়ের কোনো প্রশ্ন করো, অথবা অ্যাডমিনকে বইটি যোগ করতে বলো।'
+
+/**
+ * উত্তর-কনট্রাক্ট যাচাই: RAG লকে মডেলের উত্তর আসলেই বইয়ের refs থেকে এসেছে কি না।
+ * ১) পরিষ্কার প্রত্যাখ্যান ("পাইনি/তথ্য নেই") হলে বৈধ — ফুটার না থাকলেও।
+ * ২) নইলে লেক্সিক্যাল grounding: উত্তরের কনটেন্ট-শব্দ (স্বরচিহ্ন-নরমালাইজড) কত শতাংশ
+ *    refs-এর কর্পাসে আছে। ফুটার থাকলেও বানানো তথ্য (কম কভারেজ) ধরা পড়ে —
+ *    কারণ মডেল ভুয়া উত্তরের শেষেও ফুটার লাগিয়ে দিতে পারে (লাইভ টেস্টে ধরা পড়েছে)।
+ */
+const BN_STRIP = /[\u0981-\u0983\u09BC\u09BE-\u09CC\u09CD\u09D7\u200C\u200D]/g
+
+function normToken(token: string): string {
+  return token
+    .replace(BN_STRIP, '')
+    .replace(/\u09DC/g, '\u09A1')
+    .replace(/\u09DD/g, '\u09A2')
+    .replace(/\u09DF/g, '\u09AF')
+    .replace(/\u09CE/g, '\u09A4')
+    .toLowerCase()
+}
+
+/** উত্তরে এমন শব্দ যা সংযোগকারী — এগুলো refs-এ না থাকলেও দোষ নয় */
+const COVER_STOPWORDS = new Set([
+  ...STOPWORDS,
+  ...[
+    'উত্তর', 'প্রশ্ন', 'ব্যাখ্যা', 'ধাপ', 'উদাহরণ', 'সহজ', 'কথায়', 'বলতে', 'বোঝায়', 'বোঝাও',
+    'একটি', 'দেখায়', 'মোট', 'প্রতিটি', 'প্রত্যেক', 'নিচে', 'উপরে', 'মানে', 'অর্থাৎ', 'লিখে',
+    'দেওয়া', 'নেওয়া', 'হয়ে', 'গিয়ে', 'পরে', 'আগে', 'ভিতরে', 'বাইরে', 'কোনো', 'কিছু', 'সব',
+    'দুটি', 'তিনটি', 'চারটি', 'পাঁচটি', 'প্রথম', 'দ্বিতীয়', 'তৃতীয়', 'চতুর্থ', 'পঞ্চম',
+    'শেষে', 'মধ্য', 'বিষয়ে', 'প্রয়োজন', 'এখন', 'খুব', 'বেশি', 'কম', 'সবচেয়ে', 'অন্য', 'অনেক',
+    'সাধারণ', 'বিশেষ', 'তখন', 'এখনো', 'যেমন', 'তেমন', 'কেননা', 'জন্যে', 'দিকে', 'কাছে',
+    'text', 'frac', 'times', 'sqrt', 'div', 'left', 'right', 'cdot', 'begin', 'end',
+  ].map(normToken),
+])
+
+/** পরিষ্কার প্রত্যাখ্যান-বাক্য চেনার প্যাটার্ন (ফুটার ছাড়া) */
+const REFUSAL_PATTERN =
+  /পাইনি|পাওয়া\s*যায়নি|পাওয়া\s*যায়\s*নি|পাওয়া\s*যায়\s*না|তথ্য\s*(কোনো\s*)?নেই|বইয়ে\s*(এই\s*)?(বিষয়ে\s*)?নেই|বইয়ে\s*উল্লেখ\s*নেই|উত্তর\s*নেই|নেই\s*বইয়ে/
+
+/** একটি টেক্সটের কনটেন্ট-টোকেন (নরমালাইজড, স্টপওয়ার্ড/সংখ্যা বাদ) */
+function contentTokens(text: string): string[] {
+  const raw = text.match(/[\p{L}\p{N}]+/gu) ?? []
+  return raw
+    .filter((t) => !/^\d+$/.test(t) && t.length >= 2)
+    .map(normToken)
+    .filter((t) => t.length >= 2 && !COVER_STOPWORDS.has(t))
+}
+
+/**
+ * একটি উত্তর-টোকেনের কর্পাস-মিল (০–১)।
+ * OCR/পিডিএফ-ক্ষতিগ্রস্ত বইয়ে স্বরচিহ্ন ভেঙে যায় ("শক্তি"→"শক্যা") — তাই
+ * সাধারণ prefix-এ আংশিক ক্রেডিট দিলে বইয়ে থাকা সঠিক উত্তর মিস হয় না,
+ * আর সম্পূর্ণ বানানো শব্দ (S-ধাপ, সেন্ট্রোমিয়ার…) তবুও ০-ই থাকে।
+ */
+function tokenMatchScore(token: string, corpus: Set<string>): number {
+  if (corpus.has(token)) return 1
+  const len = token.length
+  if (len < 3) return 0
+  const p3 = token.slice(0, 3)
+  const p2 = token.slice(0, 2)
+  for (const c of corpus) {
+    if (c.length >= 3 && c.slice(0, 3) === p3) return 0.7
+  }
+  for (const c of corpus) {
+    if (c.length >= 3 && c.slice(0, 2) === p2) return 0.4
+  }
+  return 0
+}
+
+/** refs কর্পাসে উত্তরের কনটেন্ট-টোকেন কভারেজ (০–১) — লগ/টিউনিংয়ের জন্য আলাদা export */
+export function bookCoverage(
+  answerText: string,
+  refs: Pick<RetrievedChunk, 'content' | 'book' | 'chapter' | 'page'>[]
+): number {
+  if (!refs.length) return 1
+  const corpus = new Set<string>()
+  for (const r of refs) {
+    for (const t of contentTokens(`${r.book} ${r.chapter} ${r.page ?? ''} ${r.content}`)) {
+      corpus.add(t)
+    }
+  }
+  if (!corpus.size) return 1
+
+  const answerTokens = [...new Set(contentTokens(answerText))]
+  if (answerTokens.length < 4) return 1 // যাচাই করার মতো কনটেন্ট নেই — ছোট উত্তর ছেড়ে দাও
+
+  let score = 0
+  for (const t of answerTokens) score += tokenMatchScore(t, corpus)
+  return score / answerTokens.length
+}
+
+export function answerGroundedInBook(
+  answerText: string,
+  refs: Pick<RetrievedChunk, 'content' | 'book' | 'chapter' | 'page'>[],
+  threshold = 0.45
+): boolean {
+  // ১) পরিষ্কার প্রত্যাখ্যান — ফুটার না থাকলে বৈধ (ফুটার+প্রত্যাখ্যান মিশ্রণ হলে নিচে যাচাই হবে)
+  if (REFUSAL_PATTERN.test(answerText) && !/বইয়ের\s*রেফারেন্স/.test(answerText)) return true
+  // ২) লেক্সিক্যাল grounding — বানানো তথ্যের কভারেজ কম হয়
+  return bookCoverage(answerText, refs) >= threshold
+}
+
 function tokenize(text: string): string[] {
   return (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(
     (t) => t.length >= 2 && !STOPWORDS.has(t)
