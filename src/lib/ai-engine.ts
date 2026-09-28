@@ -5,46 +5,81 @@ import {
   isEngineHealthy,
   isTransientAiError,
   isPermanentAiError,
+  isModelNotFoundAiError,
+  asGeminiError,
   nextEngineWakeMs,
 } from '@/lib/keypool'
 import { generateContent, type GeneratedAnswer } from '@/lib/gemini'
-import { zaiChat, zaiChatWithKey, tuneZaiCapacity } from '@/lib/zai'
-import type { AppSettings } from '@/lib/settings'
+import { zaiChat, zaiChatWithKey, tuneZaiCapacity, zaiDefaultModel, zaiEnvConfigured } from '@/lib/zai'
+import { getActiveModelIds } from '@/lib/models'
+import { DEFAULT_SETTINGS, type AppSettings } from '@/lib/settings'
 import type { EngineId } from '@/lib/types'
 
 /**
  * ইউনিফাইড ডুয়াল-ইঞ্জিন — Zero-Cost Load Balancing + নেভার-ফেইল নীতি:
  * ১. অ্যাডমিন সেটিংস অনুযায়ী মূল ইঞ্জিন (Gemini বা Z.ai) — দুটোরই নিজস্ব কী-পুল
- * ২. মূল ইঞ্জিন ফেইল (কী নেই/রেট-লিমিট/এরর) → অন্য ইঞ্জিন (fallbackEnabled হলে)
- * ৩. ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত) → অপেক্ষা করে আরও ২ পাস — queue-র মতো
- * ৪. সেফটি-ব্লক হলে পরের ইঞ্জিন — শিক্ষার্থী কোনো টেকনিক্যাল এরর দেখবে না
+ * ২. প্রতি ইঞ্জিনে অ্যাডমিনের মডেল রেজিস্ট্রির চালু মডেলগুলো পালা করে চেষ্টা হয় —
+ *    ভুল/বন্ধ মডেল হলে নিঃশব্দে পরের মডেল (স্টুডেন্ট কিছুই টের পায় না)
+ * ৩. মূল ইঞ্জিন ফেইল (কী নেই/রেট-লিমিট/এরর) → অন্য ইঞ্জিন (fallbackEnabled হলে)
+ * ৪. ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত) → অপেক্ষা করে আরও পাস — queue-র মতো
+ * ৫. সেফটি-ব্লক হলে পরের ইঞ্জিন — শিক্ষার্থী কোনো টেকনিক্যাল এরর দেখবে না
  */
-export type EngineResult = GeneratedAnswer & { engine: EngineId }
+export type EngineResult = GeneratedAnswer & { engine: EngineId; modelId: string | null }
 
-// এক ইঞ্জিনে একবার চেষ্টা
-async function attempt(
+/** স্বাক্ষর-রাউটিং: প্রশ্নে অ্যাডমিনের কোড থাকলে এই ইঞ্জিন+মডেল সবার আগে চেষ্টা হয় */
+export type ForceModel = { engine: EngineId; modelId: string }
+
+type AttemptResult = GeneratedAnswer & { modelId: string | null }
+
+/** এক ইঞ্জিনের চালু মডেলগুলো পালা করে চেষ্টা — সফল মডেলের আইডিসহ ফেরত */
+async function attemptWithModels(
   engine: EngineId,
   prompt: string,
   system: string,
-  settings: AppSettings
-): Promise<GeneratedAnswer> {
-  if (engine === 'gemini') {
-    const keys = await getActiveKeys('gemini')
-    if (keys.length === 0) throw new GeminiError(503, 'NO_KEYS')
-    return generateContent(prompt, system, settings.chatModel)
+  settings: AppSettings,
+  forceModelId?: string
+): Promise<AttemptResult> {
+  const fallback =
+    engine === 'gemini'
+      ? settings.chatModel || DEFAULT_SETTINGS.chatModel
+      : zaiDefaultModel()
+  const registryModels = await getActiveModelIds(engine, fallback)
+  // জেতা স্বাক্ষর-কোডের মডেল থাকলে তালিকার একেবারে আগে
+  const models = forceModelId
+    ? [forceModelId, ...registryModels.filter((m) => m !== forceModelId)]
+    : registryModels
+
+  let lastErr: unknown = null
+  for (const model of models) {
+    try {
+      if (engine === 'gemini') {
+        const keys = await getActiveKeys('gemini')
+        if (keys.length === 0) throw new GeminiError(503, 'NO_KEYS')
+        const r = await generateContent(prompt, system, model)
+        return { ...r, modelId: model }
+      }
+      const keys = await getActiveKeys('zai')
+      if (keys.length === 0) break // Z.ai কী নেই → নিচে sandbox/env পথ
+      // key যত আছে তত slot খুলে দাও — key যোগ করলেই সাথে সাথে ক্ষমতা বাড়ে
+      tuneZaiCapacity(keys.length)
+      const text = await withKeyFailover('zai', (key) => zaiChatWithKey(key, system, prompt, model))
+      return { text, blocked: false, modelId: model }
+    } catch (e) {
+      lastErr = e
+      // মডেলটাই ভুল/নেই (404) → নিঃশব্দে পরের মডেল; বাকি এরর বাইরে — ইঞ্জিন-ফেইলওভার সামলাবে
+      if (!isModelNotFoundAiError(asGeminiError(e))) throw e
+    }
   }
-  const keys = await getActiveKeys('zai')
-  if (keys.length > 0) {
-    // key যত আছে তত slot খুলে দাও — key যোগ করলেই সাথে সাথে ক্ষমতা বাড়ে
-    tuneZaiCapacity(keys.length)
-    const text = await withKeyFailover('zai', (key) => zaiChatWithKey(key, system, prompt))
-    return { text, blocked: false }
-  }
-  // DB পুল খালি → env key (ZAI_API_KEY) বা sandbox credential — zaiChat ভিতরেই সামলায়
-  const text = await zaiChat(system, prompt)
-  return { text, blocked: false }
+  if (lastErr) throw lastErr
+
+  // এখানে এলে দাঁড়ায় শুধু Z.ai: রেজিস্ট্রি খালি বা সব মডেল skip — DB পুল খালি মানে
+  // env key (ZAI_API_KEY) বা sandbox credential — zaiChat ভিতরেই সামলায়
+  // (sandbox SDK পথে মডেল প্যারাম কার্যকর না — তখন অডিটে মডেল null রাখাই সঠিক)
+  const text = await zaiChat(system, prompt, forceModelId)
+  return { text, blocked: false, modelId: forceModelId && zaiEnvConfigured() ? forceModelId : null }
 }
 
+// এক ইঞ্জিনে একবার চেষ্টা
 interface PassOutcome {
   result: EngineResult | null
   blocked: EngineResult | null
@@ -55,7 +90,8 @@ async function runPass(
   order: EngineId[],
   prompt: string,
   system: string,
-  settings: AppSettings
+  settings: AppSettings,
+  force?: ForceModel
 ): Promise<PassOutcome> {
   let blocked: EngineResult | null = null
   let err: unknown = null
@@ -65,7 +101,13 @@ async function runPass(
       continue
     }
     try {
-      const r = await attempt(engine, prompt, system, settings)
+      const r = await attemptWithModels(
+        engine,
+        prompt,
+        system,
+        settings,
+        force && force.engine === engine ? force.modelId : undefined
+      )
       if (!r.blocked && r.text.trim()) return { result: { ...r, engine }, blocked, err }
       // সেফটি-ব্লক/খালি উত্তর — পরের ইঞ্জিন দেখো
       blocked = { ...r, engine }
@@ -80,7 +122,8 @@ async function runPass(
 export async function generateTutorAnswer(
   prompt: string,
   system: string,
-  settings: AppSettings
+  settings: AppSettings,
+  force?: ForceModel
 ): Promise<EngineResult> {
   const primary: EngineId = settings.primaryEngine === 'zai' ? 'zai' : 'gemini'
   const secondary: EngineId = primary === 'gemini' ? 'zai' : 'gemini'
@@ -96,8 +139,14 @@ export async function generateTutorAnswer(
   }
   if (order.length === 0) throw new GeminiError(503, 'NO_ENGINES_ENABLED')
 
+  // স্বাক্ষর-রাউটিং: প্রশ্নে অ্যাডমিনের দেওয়া কোড থাকলে সেই ইঞ্জিন লাইনের একেবারে সামনে
+  if (force && order.includes(force.engine)) {
+    order.splice(order.indexOf(force.engine), 1)
+    order.unshift(force.engine)
+  }
+
   // পাস ১
-  let outcome = await runPass(order, prompt, system, settings)
+  let outcome = await runPass(order, prompt, system, settings, force)
 
   // পাস ২+: ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত/ব্রেকার) → deadline-ভিত্তিক queue:
   // - ছোট ঝামেলা হলে ছোট অপেক্ষা (jitter সহ)
@@ -114,7 +163,7 @@ export async function generateTutorAnswer(
     const wake = nextEngineWakeMs()
     const wait = Math.max(WAITS[pass] + Math.floor(Math.random() * 500), Math.min(wake, 25_000))
     await new Promise((r) => setTimeout(r, wait))
-    outcome = await runPass(order, prompt, system, settings)
+    outcome = await runPass(order, prompt, system, settings, force)
     pass++
   }
 

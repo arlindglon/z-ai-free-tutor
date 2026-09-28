@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, safeUser, unauthorized } from '@/lib/session'
-import { getSettings, pickTagName } from '@/lib/settings'
+import { getSettings } from '@/lib/settings'
 import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
 import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
+import { pickModelAlias, resolveAliasTarget } from '@/lib/models'
 import { retrieveTopK, retrieveTopKLexical } from '@/lib/rag'
 import { GeminiError, isTransientAiError } from '@/lib/keypool'
 
@@ -79,7 +80,14 @@ export async function POST(req: NextRequest) {
 
     // ৫) কী-পুল থেকে জেমিনাই (429 অটো-ফেইলওভার), ফেইল হলে z-ai — স্টুডেন্ট সবসময় উত্তর পাবে
     // RAG লক চালু থাকলে সিস্টেম প্রম্পট শুধু বইয়ের রেফারেন্সে সীমাবদ্ধ থাকে
-    const result = await generateTutorAnswer(prompt, buildSystemPrompt({ ragOnly: settings.ragOnlyMode }), settings)
+    // স্বাক্ষর-রাউটিং: প্রশ্নে অ্যাডমিনের দেওয়া কোড/নাম থাকলে সেই মডেল সবার আগে চেষ্টা হয়
+    const aliasTarget = await resolveAliasTarget(question)
+    const result = await generateTutorAnswer(
+      prompt,
+      buildSystemPrompt({ ragOnly: settings.ragOnlyMode }),
+      settings,
+      aliasTarget ?? undefined
+    )
 
     if (result.blocked || !result.text.trim()) {
       await refundCredit(user.id).catch(() => {})
@@ -98,13 +106,22 @@ export async function POST(req: NextRequest) {
       snippet: r.snippet,
     }))
 
-    // ৬) উত্তর যে ইঞ্জিন দিয়েছে তার স্বাক্ষর পুল থেকে র‍্যান্ডম নাম — স্টুডেন্ট নাম দেখবে,
-    // অ্যাডমিন জানবে কোন ইঞ্জিন উত্তর দিয়েছে (পুল খালি হলে স্বাক্ষর যোগ হয় না)
-    const answerTag = pickTagName(result.engine === 'zai' ? settings.tagNameZai : settings.tagNameGemini)
+    // ৬) উত্তর যে মডেল দিয়েছে তার স্বাক্ষর পুল থেকে র‍্যান্ডম নাম — স্টুডেন্ট নাম দেখবে
+    // (আসল মডেল বুঝবে না), অ্যাডমিন নাম দেখে মডেল ধরতে পারবে। পুল খালি হলে স্বাক্ষর নেই।
+    // আসল ইঞ্জিন/মডেল শুধু DB-তে অডিটের জন্য জমা হয় — রেসপনসে ফাঁস হয় না।
+    const answerTag = await pickModelAlias(result.modelId)
 
     // ৭) হিস্ট্রিতে সেভ
     const row = await db.question.create({
-      data: { userId: user.id, question, answer: result.text, answerTag, references },
+      data: {
+        userId: user.id,
+        question,
+        answer: result.text,
+        answerTag,
+        answerEngine: result.engine,
+        answerModel: result.modelId,
+        references,
+      },
     })
 
     return NextResponse.json({
@@ -113,7 +130,6 @@ export async function POST(req: NextRequest) {
       answerTag,
       references,
       credits: { used, limit: user.role === 'admin' ? 0 : settings.dailyCredits },
-      engine: result.engine,
       user: safeUser(user),
     })
   } catch (e) {

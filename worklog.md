@@ -331,3 +331,28 @@ Stage Summary:
 - নতুন Setting keys: tagNameGemini, tagNameZai, ragOnlyMode (key-value টেবিল — TiDB-তে আলাদা মাইগ্রেশন লাগে না)
 - TiDB-তে Question.answerTag কলাম Vercel deploy-এ অটো তৈরি হবে (buildCommand db push)
 - স্বাক্ষর পুল খালি = ব্যাজ দেখাবে না (ডিফল্ট) — অ্যাডমিন সেট করলেই চালু
+
+---
+Task ID: 14
+Agent: Z.ai Code (main)
+Task: মডেল রেজিস্ট্রি — ইঞ্জিন-প্রতি মডেল তালিকা (on/off), মডেল-প্রতি স্বাক্ষর পুল, স্বাক্ষর-রাউটিং
+
+Work Log:
+- schema.prisma + schema.production.prisma: নতুন AiModel (engine+modelId unique, label, active) + ModelAlias (aiModelId FK cascade, alias unique); Question-এ answerEngine/answerModel অডিট কলাম; লোকাল db:push ✓ (TiDB-তে Vercel build এ db push হবে)
+- src/lib/models.ts নতুন: ১৫ সে ক্যাশসহ রেজিস্ট্রি লোডার (getActiveModelIds), pickModelAlias (জেতা মডেলের পুল থেকে র‍্যান্ডম), resolveAliasTarget (প্রশ্নে কোড থাকলে engine+model রাউট, লম্বা ম্যাচ আগে), ensureModelsSeeded (প্রথমবার ৭ ডিফল্ট: zai glm-4.7-flash/glm-4.5-flash/glm-4.6v-flash + gemini gemini-3.5-flash-lite/gemini-3.1-flash-lite/gemma-4-26b/gemma-4-31b; Setting 'modelsSeeded' ফ্ল্যাগে একবারই — সব মুছলেও ফিরে আসে না)
+- zai.ts: zaiChatWithKey/zaiChat/zaiHttp/zaiCall-এ model প্যারাম; zaiDefaultModel()+zaiEnvConfigured() export; মডেল-না-পাওয়া (HTTP 404 / কোড 1211 / "model does not exist") → ZAI_MODEL_NOT_FOUND এররে নরমালাইজ
+- keypool.ts: isModelNotFoundAiError() + withKeyFailover-এ ফাস্ট-ফেইল — ভুল মডেলে কী-লুপ/ব্রেকার না জ্বেলে সাথে সাথে ছাড়ে, যাতে পরের মডেল চেষ্টা হয়
+- ai-engine.ts: attemptWithModels — প্রতি ইঞ্জিনে রেজিস্ট্রির চালু মডেলগুলো পালা করে চেষ্টা (404 → নিঃশব্দে পরের মডেল), force মডেল থাকলে তালিকার সামনে; EngineResult-এ modelId; রেজিস্ট্রি খালি হলে আগের fallback (settings.chatModel / zaiDefaultModel)
+- chat route: resolveAliasTarget(question) → force; answerTag = pickModelAlias(result.modelId) (মডেল-প্রতি পুল); Question-এ answerEngine/answerModel সেভ; রেসপনস থেকে engine ফিল্ড বাদ (স্টুডেন্টকে আসল মডেল ফাঁস হয় না)
+- সেটিংস ক্লিনআপ: tagNameGemini/tagNameZai + pickTagName বাদ (মডেল-প্রতি পুলই এখন স্বাক্ষর দেয়); settings-tab থেকে পুরনো স্বাক্ষর কার্ড সরানো; RAG লক সুইচ অপরিবর্তিত
+- API: /api/admin/models (GET seed+list+usage groupBy, POST যোগ [space strip + models/ প্রিফিক্স বাদ], PATCH টগল/এডিট [ডুপ্লিকেট প্রি-চেক], DELETE cascade) + /api/admin/models/aliases (POST মাল্টিলাইন [কেস-ইনসেনসিটিভ ডুপ স্কিপ, ২–৪০ অক্ষর, প্রতি মডেলে ৫০০ ক্যাপ], DELETE); সব এরর বাংলায় + P2021/P2022 ম্যাপিং
+- UI: admin-view-এ ৫ম ট্যাব "মডেল" (Boxes আইকন); models-tab.tsx — ইঞ্জিন-প্রতি সেকশন (Gemini সবুজ / Z.ai অ্যাম্বার), যোগ-ফর্ম, প্রতি মডেলে সুইচ+এডিট(ইনলাইন)+দুই-ক্লিক ডিলিট, স্বাক্ষর চিপ (X দিয়ে মুছে)+মাল্টিলাইন টেক্সটেরিয়া, ব্যবহার ব্যাজ (N উত্তর), max-h স্ক্রল + কাস্টম স্ক্রলবার
+- E2E (curl): seed ৭ মডেল ✓, মাল্টিলাইন অ্যালিয়াস (ডুপ+১ অক্ষর স্কিপ) ✓, সব-ডুপ রিজেক্ট ✓, মডেল CRUD + 409 ডুপ + স্পেস-স্ট্রিপ ✓, চ্যাট "টেস্ট404" কোড → fake মডেল force-first → 404 → নিঃশব্দে glm-4.7-flash → উত্তর + tag "রবিন" ✓, DB অডিট (zai/glm-4.7-flash) ✓, রেসপনসে engine লিক নেই ✓, প্লেইন চ্যাট ✓
+- E2E (agent-browser): লগইন → মডেল ট্যাব রেন্ডার ✓, টেক্সটেরিয়া থেকে অ্যালিয়াস যোগ (চাঁদ স্যার চিপ) ✓, সুইচ off/on ✓, মডেল যোগ+দুই-ক্লিক ডিলিট ✓, সেটিংস সেভ রিগ্রেশন-ফ্রি ✓, ডেস্কটপ+মোবাইল স্ক্রিনশট ✓, console এরর শূন্য ✓
+- lint ক্লিন
+
+Stage Summary:
+- স্বাক্ষর ব্যবস্থা এখন মডেল-প্রতি: অ্যাডমিন প্রতিটা মডেলে যত খুশি নাম/কোড দেয়, উত্তরে জেতা মডেলের পুল থেকে র‍্যান্ডম একটা "✍ নাম" ব্যাজ — স্টুডেন্ট নাম দেখে মডেল বুঝবে না, অ্যাডমিন মডেল-তালিকায় ম্যাপ করবে; প্রশ্নে কোড লিখলে সেই মডেলেই রাউট
+- নতুন মডেল বাজারে এলে অ্যাডমিন প্যানেলে নাম লিখে যোগ — কোড ছোঁয়া লাগে না; ভুল মডেল আইডি থাকলেও সিস্টেম 404 চিনে পরের মডেলে চলে যায় (কী-পুল/ব্রেকার অক্ষত)
+- TiDB প্রোডাকশন: AiModel/ModelAlias টেবিল + Question.answerEngine/answerModel কলাম Vercel build-এর db push-এ অটো তৈরি; মডেল ট্যাব প্রথম খুললেই ৭ ডিফল্ট মডেল সিড হবে
+- ফাইল: prisma/schema*.prisma, src/lib/{models,ai-engine,zai,keypool,settings,types}.ts, src/app/api/chat/route.ts, src/app/api/admin/models/**, src/app/api/admin/settings/route.ts, src/components/tutor/admin/{admin-view,models-tab,settings-tab}.tsx

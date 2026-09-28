@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Cpu, Loader2, Lock, PenLine, Save, Sparkles } from 'lucide-react'
+import { Bot, Cpu, Loader2, Lock, Save, Sparkles } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,7 +10,6 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { api, ApiError } from '@/lib/api'
 import type { EngineId, SettingsInfo } from '@/lib/types'
 
@@ -24,9 +23,7 @@ export function SettingsTab() {
   const [geminiEnabled, setGeminiEnabled] = useState(true)
   const [zaiEnabled, setZaiEnabled] = useState(true)
   const [fallbackEnabled, setFallbackEnabled] = useState(true)
-  // উত্তরের স্বাক্ষর পুল + RAG লক
-  const [tagNameGemini, setTagNameGemini] = useState('')
-  const [tagNameZai, setTagNameZai] = useState('')
+  // RAG লক — স্বাক্ষর পুল এখন "মডেল" ট্যাবে প্রতিটা মডেলের নিজস্ব হিসেবে থাকে
   const [ragOnlyMode, setRagOnlyMode] = useState(false)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -45,8 +42,6 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
-      setTagNameGemini(data.settings.tagNameGemini ?? '')
-      setTagNameZai(data.settings.tagNameZai ?? '')
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setError(null)
     } catch (e) {
@@ -98,8 +93,6 @@ export function SettingsTab() {
           geminiEnabled,
           zaiEnabled,
           fallbackEnabled,
-          tagNameGemini,
-          tagNameZai,
           ragOnlyMode,
         },
       })
@@ -110,8 +103,6 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
-      setTagNameGemini(data.settings.tagNameGemini ?? '')
-      setTagNameZai(data.settings.tagNameZai ?? '')
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setSaved(true)
       if (hideTimer.current) clearTimeout(hideTimer.current)
@@ -241,57 +232,7 @@ export function SettingsTab() {
         </CardContent>
       </Card>
 
-      {/* উত্তরের স্বাক্ষর (মডেল মার্ক) */}
-      <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
-        <CardContent className="flex flex-col gap-4 p-4">
-          <div className="flex items-center gap-2">
-            <PenLine className="h-4 w-4 text-emerald-600" />
-            <p className="text-sm font-semibold text-stone-800">উত্তরের স্বাক্ষর (কোন ইঞ্জিন উত্তর দিয়েছে)</p>
-          </div>
-          <p className="text-xs leading-relaxed text-stone-500">
-            প্রতিটা লাইনে একটা করে নাম/কোড লেখো — যত খুশি লাইন যোগ করতে পারো। উত্তর দেওয়ার সময়
-            যে ইঞ্জিন উত্তর দিয়েছে, তার তালিকা থেকে র‍্যান্ডম একটা নাম বেছে উত্তরের নিচে দেখাবে।
-            স্টুডেন্টরা নামটা দেখে বুঝবে না কী, কিন্তু তুমি জানবে — এই নাম = এই ইঞ্জিন। 😎
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="tag-gemini" className="text-stone-700">
-                জেমিনাই ইঞ্জিনের নাম/কোড
-              </Label>
-              <Textarea
-                id="tag-gemini"
-                value={tagNameGemini}
-                onChange={(e) => {
-                  setTagNameGemini(e.target.value)
-                  markEdited()
-                }}
-                placeholder={'রবিন\nG-7\nসূর্য স্যার'}
-                rows={5}
-                className="min-h-24 border-stone-200 text-sm focus-visible:ring-emerald-300"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="tag-zai" className="text-stone-700">
-                Z.ai GLM ইঞ্জিনের নাম/কোড
-              </Label>
-              <Textarea
-                id="tag-zai"
-                value={tagNameZai}
-                onChange={(e) => {
-                  setTagNameZai(e.target.value)
-                  markEdited()
-                }}
-                placeholder={'সাগর\nZ-9\nচাঁদ স্যার'}
-                rows={5}
-                className="min-h-24 border-stone-200 text-sm focus-visible:ring-emerald-300"
-              />
-            </div>
-          </div>
-          <p className="text-xs text-stone-400">
-            দুই তালিকাই খালি রাখলে উত্তরে কোনো স্বাক্ষর দেখাবে না।
-          </p>
-        </CardContent>
-      </Card>
+      {/* উত্তরের স্বাক্ষর পুল এখন "মডেল" ট্যাবে — প্রতিটা মডেলের নিজস্ব পুল */}
 
       {/* RAG লক — শুধু বই থেকে উত্তর */}
       <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
@@ -346,7 +287,8 @@ export function SettingsTab() {
             className="h-11 border-stone-200 font-mono text-sm focus-visible:ring-emerald-300"
           />
           <p className="text-xs text-stone-500">
-            গুগল নতুন মডেল বের করলে এখানে শুধু নাম বদলে দিলেই হবে — কোড ছোঁয়ার দরকার নেই।
+            মডেল তালিকা খালি হলে এই ডিফল্ট মডেল চলে — আসল মডেল তালিকা, চালু/বন্ধ আর স্বাক্ষর
+            পুল সব "মডেল" ট্যাবে।
           </p>
         </div>
 

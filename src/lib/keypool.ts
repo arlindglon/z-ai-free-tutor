@@ -92,6 +92,29 @@ export function isPermanentAiError(e: unknown): boolean {
   )
 }
 
+/**
+ * মডেল-স্পেসিফিক ব্যর্থতা — মডেল আইডি ভুল/মডেল আর নেই (HTTP 404 বা API-র
+ * "model not found" ধরনের বার্তা)। কী বদলালেও লাভ নেই, তাই কী-লুপ/ব্রেকার না জ্বালিয়ে
+ * সাথে সাথে ছাড়িয়ে দিতে হবে — ai-engine পরের চালু মডেল চেষ্টা করবে।
+ */
+const RESERVED_ERRORS = [
+  'NO_KEYS',
+  'NO_ENGINES_ENABLED',
+  'GEO_BLOCKED',
+  'ENGINE_DOWN',
+  'KEY_POOL_EXHAUSTED',
+  'ALL_ENGINES_DOWN',
+  'ALL_MODELS_FAILED',
+]
+export function isModelNotFoundAiError(e: unknown): boolean {
+  if (!(e instanceof GeminiError)) return false
+  if (RESERVED_ERRORS.includes(e.message)) return false
+  if (e.status === 404) return true
+  return /model (not found|does not exist|is not (?:found|available|supported))|invalid model|model_not_found|unknown model/i.test(
+    e.message
+  )
+}
+
 export async function withKeyFailover<T>(engine: EngineId, fn: (key: string) => Promise<T>): Promise<T> {
   const st = states[engine]
   if (Date.now() < st.downUntil) {
@@ -114,6 +137,10 @@ export async function withKeyFailover<T>(engine: EngineId, fn: (key: string) => 
     } catch (e) {
       const err = asGeminiError(e)
       lastErr = err
+
+      // মডেলটাই ভুল/নেই — কী বদলানো বৃথা, ব্রেকারও ট্রিপ করবে না;
+      // সাথে সাথে ছাড়িয়ে দাও যাতে পরের মডেল চেষ্টা হয়
+      if (isModelNotFoundAiError(err)) throw err
 
       // জিও-ব্লক (লোকেশন সাপোর্টেড না) — সব কী-তে একই হবে, সাথে সাথে ব্রেকার ট্রিপ
       if (err.message === 'GEO_BLOCKED') {

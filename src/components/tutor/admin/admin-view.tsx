@@ -1,12 +1,13 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { BarChart3, KeyRound, Library, LogOut, Settings, ShieldCheck } from 'lucide-react'
+import { BarChart3, Boxes, KeyRound, Library, LogOut, Settings, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { UserInfo } from '@/lib/types'
 import { BooksTab } from './books-tab'
 import { KeysTab } from './keys-tab'
+import { ModelsTab } from './models-tab'
 import { SettingsTab } from './settings-tab'
 import { StatsTab } from './stats-tab'
 
@@ -48,13 +49,20 @@ export function AdminView({ user, onLogout }: { user: UserInfo; onLogout: () => 
         className="mx-auto w-full max-w-4xl px-4 py-6"
       >
         <Tabs defaultValue="keys" className="gap-4">
-          <TabsList className="grid h-11 w-full grid-cols-4 rounded-2xl border border-emerald-100 bg-white p-1 shadow-sm">
+          <TabsList className="grid h-11 w-full grid-cols-5 rounded-2xl border border-emerald-100 bg-white p-1 shadow-sm">
             <TabsTrigger
               value="keys"
               className="gap-1 rounded-xl px-1 text-xs font-semibold text-stone-600 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-700 data-[state=active]:shadow-none sm:gap-1.5 sm:px-2 sm:text-sm"
             >
               <KeyRound className="h-4 w-4 shrink-0" />
               API কী
+            </TabsTrigger>
+            <TabsTrigger
+              value="models"
+              className="gap-1 rounded-xl px-1 text-xs font-semibold text-stone-600 data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-700 data-[state=active]:shadow-none sm:gap-1.5 sm:px-2 sm:text-sm"
+            >
+              <Boxes className="h-4 w-4 shrink-0" />
+              মডেল
             </TabsTrigger>
             <TabsTrigger
               value="books"
@@ -81,6 +89,9 @@ export function AdminView({ user, onLogout }: { user: UserInfo; onLogout: () => 
 
           <TabsContent value="keys">
             <KeysTab />
+          </TabsContent>
+          <TabsContent value="models">
+            <ModelsTab />
           </TabsContent>
           <TabsContent value="books">
             <BooksTab />

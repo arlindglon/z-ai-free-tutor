@@ -28,8 +28,6 @@ export async function PUT(req: NextRequest) {
     geminiEnabled: typeof body.geminiEnabled === 'boolean' ? body.geminiEnabled : undefined,
     zaiEnabled: typeof body.zaiEnabled === 'boolean' ? body.zaiEnabled : undefined,
     fallbackEnabled: typeof body.fallbackEnabled === 'boolean' ? body.fallbackEnabled : undefined,
-    tagNameGemini: body.tagNameGemini !== undefined ? String(body.tagNameGemini) : undefined,
-    tagNameZai: body.tagNameZai !== undefined ? String(body.tagNameZai) : undefined,
     ragOnlyMode: typeof body.ragOnlyMode === 'boolean' ? body.ragOnlyMode : undefined,
   })
   return NextResponse.json({ settings })

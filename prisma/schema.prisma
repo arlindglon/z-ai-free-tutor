@@ -96,13 +96,38 @@ model Chunk {
 }
 
 model Question {
-  id         String   @id @default(cuid())
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question   String
-  answer     String?
-  answerTag  String?
-  references Json?
-  createdAt  DateTime @default(now())
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question     String
+  answer       String?
+  answerTag    String?
+  answerEngine String? // অ্যাডমিন অডিট — কোন ইঞ্জিন উত্তর দিয়েছে (স্টুডেন্ট দেখে না)
+  answerModel  String? // অ্যাডমিন অডিট — কোন মডেল উত্তর দিয়েছে (স্টুডেন্ট দেখে না)
+  references   Json?
+  createdAt    DateTime @default(now())
   @@index([userId, createdAt])
+}
+
+// চ্যাট মডেল রেজিস্ট্রি — ইঞ্জিন প্রতি যত খুশি মডেল; নতুন মডেল এলে অ্যাডমিন প্যানেল থেকেই নাম বদলাও (কোড ছোঁয়ার দরকার নেই)
+model AiModel {
+  id        String       @id @default(cuid())
+  engine    String // gemini | zai
+  modelId   String // API মডেল আইডি — যেমন gemini-3.5-flash-lite / glm-4.5-flash
+  label     String? // ডিসপ্লে নাম — যেমন "Gemini 3.5 Flash Lite"
+  active    Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  aliases   ModelAlias[]
+  @@unique([engine, modelId])
+  @@index([engine, active])
+}
+
+// মডেল-প্রতি স্বাক্ষর পুল — যত খুশি নাম/কোড (অ্যাডমিন লাইন বাই লাইন যোগ করে; উত্তরে র‍্যান্ডম একটা দেখাবে)
+model ModelAlias {
+  id         String   @id @default(cuid())
+  aiModelId  String
+  aiModel    AiModel  @relation(fields: [aiModelId], references: [id], onDelete: Cascade)
+  alias      String   @unique
+  createdAt  DateTime @default(now())
+  @@index([aiModelId])
 }

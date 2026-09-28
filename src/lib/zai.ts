@@ -22,6 +22,16 @@ let instance: ZAIInstance | null = null
 
 const ENV_API_KEY = process.env.ZAI_API_KEY?.trim() || ''
 const ENV_MODEL = process.env.ZAI_MODEL?.trim() || 'glm-4.7-flash'
+
+/** Z.ai-এর ডিফল্ট ফ্রি মডেল — মডেল রেজিস্ট্রি খালি হলে এটাই fallback */
+export function zaiDefaultModel(): string {
+  return ENV_MODEL
+}
+
+/** Env key (ZAI_API_KEY) সেট আছে কি না — অডিটের জন্য (sandbox SDK পথে মডেল প্যারাম কাজ করে না) */
+export function zaiEnvConfigured(): boolean {
+  return envConfigured
+}
 const ENV_BASE_URL =
   (process.env.ZAI_BASE_URL?.trim() || 'https://api.z.ai/api/paas/v4').replace(/\/+$/, '')
 
@@ -72,11 +82,16 @@ interface OpenAiLikeResponse {
 
 // ১) একটি নির্দিষ্ট key দিয়ে Z.ai পাবলিক প্ল্যাটফর্ম কল — OpenAI-compatible এন্ডপয়েন্ট
 //    (key-pool থেকে key এসে ডাকা হয়; semaphore + 429-retry ভিতরেই)
-export async function zaiChatWithKey(apiKey: string, system: string, prompt: string): Promise<string> {
-  return withSlot(() => zaiCall(apiKey, system, prompt))
+export async function zaiChatWithKey(
+  apiKey: string,
+  system: string,
+  prompt: string,
+  model?: string
+): Promise<string> {
+  return withSlot(() => zaiCall(apiKey, system, prompt, model))
 }
 
-async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<string> {
+async function zaiHttp(apiKey: string, system: string, prompt: string, model?: string): Promise<string> {
   const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -84,7 +99,7 @@ async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: ENV_MODEL,
+      model: model || ENV_MODEL,
       messages: [
         { role: 'assistant', content: system },
         { role: 'user', content: prompt },
@@ -94,6 +109,11 @@ async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
+    // মডেল-না-পাওয়া আলাদা করে চিনাও (Z.ai 404/কোড 1211 দেয়) — তাহলে ai-engine
+    // নিঃশব্দে পরের চালু মডেল চেষ্টা করতে পারে, কী-পুল/ব্রেকার না জ্বালিয়ে
+    if (res.status === 404 || /"code"\s*:\s*"?1211"?|model.{0,40}(not exist|not found|invalid)|不存在/i.test(body)) {
+      throw new Error(`ZAI_MODEL_NOT_FOUND (HTTP ${res.status}): ${body.slice(0, 200)}`)
+    }
     throw new Error(`ZAI_ENV_HTTP_${res.status}: ${body.slice(0, 200)}`)
   }
   const data = (await res.json()) as OpenAiLikeResponse
@@ -102,12 +122,12 @@ async function zaiHttp(apiKey: string, system: string, prompt: string): Promise<
   return text
 }
 
-async function zaiCall(apiKey: string, system: string, prompt: string): Promise<string> {
+async function zaiCall(apiKey: string, system: string, prompt: string, model?: string): Promise<string> {
   const RETRIES = 3
   const BACKOFFS = [1500, 3000, 5000] // 429 (1302/1305) হলে অপেক্ষা + jitter — লাইনে দাঁড়িয়ে আবার
   for (let attempt = 0; ; attempt++) {
     try {
-      return await zaiHttp(apiKey, system, prompt)
+      return await zaiHttp(apiKey, system, prompt, model)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
@@ -124,16 +144,16 @@ async function getZai(): Promise<ZAIInstance> {
   return instance
 }
 
-export async function zaiChat(system: string, prompt: string): Promise<string> {
+export async function zaiChat(system: string, prompt: string, model?: string): Promise<string> {
   // DB key-pool-এ Z.ai key থাকলে সেগুলোই আগে (withKeyFailover রাউন্ড-রবিন)
   const { getActiveKeys, withKeyFailover } = await import('@/lib/keypool')
   const keys = await getActiveKeys('zai')
   if (keys.length > 0) {
-    return withKeyFailover('zai', (key) => zaiCall(key, system, prompt))
+    return withKeyFailover('zai', (key) => zaiCall(key, system, prompt, model))
   }
   if (envConfigured) {
     // Env key (Vercel/সেলফ-হোস্ট)
-    return withSlot(() => zaiCall(ENV_API_KEY, system, prompt))
+    return withSlot(() => zaiCall(ENV_API_KEY, system, prompt, model))
   }
   // শেষ ভরসা: স্যান্ডবক্স SDK credential (.z-ai-config ফাইল)
   const zai = await getZai()
