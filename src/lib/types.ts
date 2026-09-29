@@ -62,6 +62,8 @@ export type BookInfo = {
   id: string
   title: string
   subject: string
+  /** স্তর — প্রাক-প্রাথমিক / প্রাথমিক / মাধ্যমিক / দাখিল ইত্যাদি */
+  level?: string | null
   board: string | null
   /** ব্যাকগ্রাউন্ডে অটো-এমবেড চলছে কি না (PDF আপলোড/সেভের পরে) */
   autoEmbedding?: boolean
@@ -69,6 +71,9 @@ export type BookInfo = {
   embedError?: string | null
   chapters: ChapterInfo[]
 }
+
+/** স্তর/বিষয় রেজিস্ট্রি — অ্যাডমিন ইচ্ছেমতো যোগ/বদল/মুছতে পারে */
+export type CategoryInfo = { id: string; name: string }
 
 export type StatsInfo = {
   users: number

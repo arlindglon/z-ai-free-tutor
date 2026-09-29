@@ -45,6 +45,7 @@ export async function GET() {
       id: b.id,
       title: b.title,
       subject: b.subject,
+      level: b.level,
       board: b.board,
       autoEmbedding: isAutoEmbedding(b.id),
       embedError: b.embedError,

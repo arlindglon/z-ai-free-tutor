@@ -65,10 +65,21 @@ model Setting {
   value String
 }
 
+// স্তর ও বিষয় রেজিস্ট্রি — অ্যাডমিন নিজেই যোগ/নাম বদল/মুছতে পারে (কোড ছোঁয়ার দরকার নেই)
+model Category {
+  id        String   @id @default(cuid())
+  type      String // level (স্তর) | subject (বিষয়)
+  name      String
+  createdAt DateTime @default(now())
+  @@unique([type, name])
+  @@index([type])
+}
+
 model Book {
   id         String    @id @default(cuid())
   title      String
   subject    String
+  level      String? // স্তর — প্রাক-প্রাথমিক / প্রাথমিক / মাধ্যমিক / দাখিল / কারিগরি ইত্যাদি
   board      String?
   embedError String? // অটো-এমবেড থেমে গেলে কারণ (কী নেই / জিও-ব্লক / রেট-লিমিট) — null মানে সব ঠিক
   createdAt  DateTime  @default(now())
