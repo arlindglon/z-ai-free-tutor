@@ -199,7 +199,7 @@ const REFUSAL_PATTERN =
 
 /** একটি টেক্সটের কনটেন্ট-টোকেন (নরমালাইজড, স্টপওয়ার্ড/সংখ্যা বাদ) */
 function contentTokens(text: string): string[] {
-  const raw = text.match(/[\p{L}\p{N}]+/gu) ?? []
+  const raw = text.match(/[\p{L}\p{M}\p{N}]+/gu) ?? []
   return raw
     .filter((t) => !/^\d+$/.test(t) && t.length >= 2)
     .map(normToken)
@@ -270,9 +270,27 @@ export function answerGroundedInBook(
 }
 
 function tokenize(text: string): string[] {
-  return (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter(
-    (t) => t.length >= 2 && !STOPWORDS.has(t)
-  )
+  return (text.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? [])
+    .filter((t) => t.length >= 2 && !STOPWORDS.has(t))
+    .map(stemBn)
+}
+
+/**
+ * হালকা বাংলা শব্দ-মূল — রিট্রিভালে বিভক্তি ছাড়িয়ে মিলাতে:
+ * মাটির→মাটি, চাষের→চাষ, ক্ষেত্রে→ক্ষেত্র, মাটিতে→মাটি, পোকাগুলো→পোকা।
+ * দুই পাশে (প্রশ্ন+বই) একই নিয়মে করা হয়, তাই আগে মিলত না এমন রূপও মিলে যায়।
+ */
+const STEM_SUFFIXES = [
+  'গুলোতে', 'গুলোর', 'গুলোকে', 'গুলো', 'গুলিতে', 'গুলির', 'গুলি',
+  'য়ের', 'েকে', 'ের', 'তে', 'য়ে', 'কে', 'টির', 'টার', 'টি', 'টা', 'ে', 'র',
+]
+
+function stemBn(t: string): string {
+  if (t.length < 4) return t
+  for (const s of STEM_SUFFIXES) {
+    if (t.endsWith(s) && t.length - s.length >= 3) return t.slice(0, t.length - s.length)
+  }
+  return t
 }
 
 let lexCache: { at: number; rows: LexRow[]; idf: Map<string, number> } | null = null
@@ -339,9 +357,20 @@ export async function retrieveTopKLexical(
       let matched = 0
       let rareHit = false // বিরল টার্ম (বেশিরভাগ চাঙ্কে নেই) — শক্তিশালী টপিক সিগন্যাল
       for (const [t, qn] of qtf) {
-        const rowTf = r.tf.get(t)
+        let rowTf = r.tf.get(t)
+        let w = idf.get(t) ?? 1
+        if (!rowTf) {
+          // আংশিক মিল — নিষ্কাশন ↔ (সু)নিষ্কাশনযোগ্য, শস্য ↔ শস্যের মতো রূপের জন্য (অর্ধেক ওজন)
+          for (const [dt, dtf] of r.tf) {
+            if (Math.min(dt.length, t.length) < 5) continue
+            if (dt.startsWith(t) || t.startsWith(dt) || (t.length >= 5 && dt.includes(t))) {
+              rowTf = dtf
+              w = Math.max(0.4, ((idf.get(dt) ?? 1) * 0.5))
+              break
+            }
+          }
+        }
         if (!rowTf) continue
-        const w = idf.get(t) ?? 1
         score += rowTf * w * (1 + Math.log(qn))
         matched++
         if (w >= 1.2) rareHit = true

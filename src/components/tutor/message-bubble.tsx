@@ -97,12 +97,21 @@ function Markdown({ children }: { children: string }) {
 
 function ReferenceChips({ references }: { references: BookReference[] }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null)
-  if (references.length === 0) return null
-  const open = openIdx !== null ? references[openIdx] : null
+  // ডিডুপ: একই বই+অধ্যায়+পৃষ্ঠার একাধিক রেফারেন্স = একটাই চিপ।
+  // পুরনো হিস্ট্রির সারিতে ডুপ্লিকেট থাকলেও রেন্ডার পরিষ্কার থাকবে।
+  const uniqueRefs = references.filter((r, i) => {
+    return (
+      references.findIndex(
+        (o) => o.book === r.book && o.chapter === r.chapter && (o.page ?? null) === (r.page ?? null)
+      ) === i
+    )
+  })
+  if (uniqueRefs.length === 0) return null
+  const open = openIdx !== null ? uniqueRefs[openIdx] : null
   return (
     <div className="mt-2 flex w-full flex-col gap-1.5">
       <div className="flex flex-wrap gap-1.5">
-        {references.map((ref, i) => {
+        {uniqueRefs.map((ref, i) => {
           const isOpen = openIdx === i
           return (
             <button
