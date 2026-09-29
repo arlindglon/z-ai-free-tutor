@@ -40,6 +40,8 @@ type EmbedResult = { bookId: string; embeddedCount: number; remainingCount: numb
 
 type TextImportResult = {
   book: BookInfo
+  /** true = আগের বইয়ে পৃষ্ঠা যোগ হয়েছে; false = নতুন বই তৈরি হয়েছে */
+  appended: boolean
   pageCount: number | null
   chapterCount: number
   chunkCount: number
@@ -70,6 +72,9 @@ export function BooksTab() {
   }, [])
 
   // ---------- ধাপ ২: টেক্সট পেস্ট ফর্ম ----------
+  // mode: 'new' = নতুন বই তৈরি | 'append' = আগের বইয়ে পরের ব্যাচের পৃষ্ঠা যোগ (OCR ব্যাচে ব্যাচে হয়)
+  const [mode, setMode] = useState<'new' | 'append'>('new')
+  const [appendBookId, setAppendBookId] = useState('')
   const [title, setTitle] = useState('')
   const [level, setLevel] = useState('')
   const [subject, setSubject] = useState('')
@@ -330,18 +335,25 @@ export function BooksTab() {
     if (saving) return
     setFormError(null)
     setSuccessMsg(null)
-    const t = title.trim()
-    if (t.length < 2) {
-      setFormError('বইয়ের নাম দাও।')
+    const isAppend = mode === 'append'
+    if (isAppend && !appendBookId) {
+      setFormError('কোন বইয়ে পৃষ্ঠা যোগ হবে সেটা বাছো।')
       return
     }
-    if (!level) {
-      setFormError('স্তর সিলেক্ট করো — তালিকায় না থাকলে "ম্যানেজ" থেকে যোগ করো।')
-      return
-    }
-    if (!subject) {
-      setFormError('বিষয় সিলেক্ট করো — তালিকায় না থাকলে "ম্যানেজ" থেকে যোগ করো।')
-      return
+    if (!isAppend) {
+      const t = title.trim()
+      if (t.length < 2) {
+        setFormError('বইয়ের নাম দাও।')
+        return
+      }
+      if (!level) {
+        setFormError('স্তর সিলেক্ট করো — তালিকায় না থাকলে "ম্যানেজ" থেকে যোগ করো।')
+        return
+      }
+      if (!subject) {
+        setFormError('বিষয় সিলেক্ট করো — তালিকায় না থাকলে "ম্যানেজ" থেকে যোগ করো।')
+        return
+      }
     }
     if (text.trim().length < 120) {
       setFormError('লেখা খুব ছোট — অন্তত ১২০ অক্ষরের OCR টেক্সট পেস্ট করো।')
@@ -351,14 +363,20 @@ export function BooksTab() {
     try {
       const data = await api<TextImportResult>('/api/admin/books/text', {
         method: 'POST',
-        body: { title: t, level, subject, text },
+        body: isAppend
+          ? { bookId: appendBookId, text }
+          : { title: title.trim(), level, subject, text },
       })
-      setTitle('')
+      if (!isAppend) setTitle('')
       setText('')
       setSuccessMsg(
-        `"${data.book.title}" যোগ হলো — ${
-          data.pageCount ? `${toBn(data.pageCount)} পৃষ্ঠা · ` : ''
-        }${toBn(data.chapterCount)} অধ্যায় · ${toBn(data.chunkCount)} চাঙ্ক — এখন স্বয়ংক্রিয়ভাবে এমবেড হচ্ছে, তুমি আর কিছু করতে হবে না!`
+        data.appended
+          ? `"${data.book.title}"-এ যোগ হলো — ${
+              data.pageCount ? `${toBn(data.pageCount)} পৃষ্ঠা · ` : ''
+            }${toBn(data.chapterCount)} অধ্যায় · ${toBn(data.chunkCount)} চাঙ্ক — অটো-এমবেড চলছে। পরের ব্যাচ এখানেই পেস্ট করতে পারো!`
+          : `"${data.book.title}" যোগ হলো — ${
+              data.pageCount ? `${toBn(data.pageCount)} পৃষ্ঠা · ` : ''
+            }${toBn(data.chapterCount)} অধ্যায় · ${toBn(data.chunkCount)} চাঙ্ক — এখন স্বয়ংক্রিয়ভাবে এমবেড হচ্ছে, তুমি আর কিছু করতে হবে না!`
       )
       await loadBooks()
     } catch (e) {
@@ -521,11 +539,80 @@ export function BooksTab() {
             <h3 className="font-semibold text-stone-900">ধাপ ২ — টেক্সট পেস্ট করে বই যোগ করো</h3>
             <p className="mt-1 text-xs text-stone-500">
               &quot;### পৃষ্ঠা N&quot; মার্কার থাকলে পৃষ্ঠা ও অধ্যায় নিজে থেকেই ভাগ হবে — রেফারেন্সে
-              প্রকৃত পৃষ্ঠা নম্বর দেখা যাবে।
+              প্রকৃত পৃষ্ঠা নম্বর দেখা যাবে। বই বড় হলে প্রথমে <b>নতুন বই</b> বানাও, তারপর প্রতি
+              ব্যাচ <b>আগের বইয়ে যোগ</b> দিয়ে পেস্ট করো।
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          {/* মোড টগল: নতুন বই বনাম আগের বইয়ে পৃষ্ঠা যোগ */}
+          <div
+            className="flex w-fit rounded-xl bg-stone-100 p-1"
+            role="tablist"
+            aria-label="বই যোগের মোড"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'new'}
+              onClick={() => setMode('new')}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                mode === 'new'
+                  ? 'bg-white text-emerald-700 shadow-sm'
+                  : 'text-stone-500 hover:text-stone-700'
+              }`}
+            >
+              🆕 নতুন বই
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'append'}
+              onClick={() => setMode('append')}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                mode === 'append'
+                  ? 'bg-white text-emerald-700 shadow-sm'
+                  : 'text-stone-500 hover:text-stone-700'
+              }`}
+            >
+              ➕ আগের বইয়ে পৃষ্ঠা যোগ
+            </button>
+          </div>
+
+          {mode === 'append' ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="append-book" className="text-stone-700">
+                কোন বইয়ে পৃষ্ঠা যোগ হবে?
+              </Label>
+              <Select value={appendBookId} onValueChange={setAppendBookId}>
+                <SelectTrigger
+                  id="append-book"
+                  className="h-11 w-full border-stone-200 focus-visible:ring-emerald-300"
+                >
+                  <SelectValue placeholder="বই বাছো" />
+                </SelectTrigger>
+                <SelectContent className="max-h-72">
+                  {(books ?? []).map((b) => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {b.title}
+                      {b.level ? ` — ${b.level}` : ''}
+                      {b.subject ? ` (${b.subject})` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {books !== null && books.length === 0 ? (
+                <p className="text-xs text-amber-700">
+                  এখনো কোনো বই নেই — আগে &quot;নতুন বই&quot; মোডে প্রথম ব্যাচটা যোগ করো।
+                </p>
+              ) : (
+                <p className="text-xs text-stone-500">
+                  Gemini থেকে পরের ব্যাচের পৃষ্ঠা (যেমন ৬–১০) পেস্ট করলেই এই বইয়ে যোগ হবে — পৃষ্ঠা
+                  নম্বর নিজে থেকেই মিলে যাবে, অটো-এমবেডও চলবে।
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-3">
             <div className="flex flex-col gap-1.5 sm:col-span-1">
               <Label htmlFor="book-title" className="text-stone-700">
                 বইয়ের নাম
@@ -598,7 +685,8 @@ export function BooksTab() {
                 </SelectContent>
               </Select>
             </div>
-          </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ocr-text" className="text-stone-700">
