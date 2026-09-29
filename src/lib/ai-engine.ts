@@ -84,6 +84,8 @@ interface PassOutcome {
   result: EngineResult | null
   blocked: EngineResult | null
   err: unknown
+  /** কোনো এক ইঞ্জিন "কী নেই" (NO_KEYS) বলেছে — শেষ এররটা জেনেরিক হলেও এটা জানা জরুরি */
+  noKeys: boolean
 }
 
 async function runPass(
@@ -95,6 +97,7 @@ async function runPass(
 ): Promise<PassOutcome> {
   let blocked: EngineResult | null = null
   let err: unknown = null
+  let noKeys = false
   for (const engine of order) {
     if (!isEngineHealthy(engine)) {
       err = new GeminiError(503, 'ENGINE_DOWN')
@@ -108,15 +111,19 @@ async function runPass(
         settings,
         force && force.engine === engine ? force.modelId : undefined
       )
-      if (!r.blocked && r.text.trim()) return { result: { ...r, engine }, blocked, err }
+      if (!r.blocked && r.text.trim()) return { result: { ...r, engine }, blocked, err, noKeys }
       // সেফটি-ব্লক/খালি উত্তর — পরের ইঞ্জিন দেখো
       blocked = { ...r, engine }
     } catch (e) {
       err = e
+      // "কী নেই" মনে রাখো — অন্য ইঞ্জিনের জেনেরিক এরর (যেমন Z.ai স্যান্ডবক্স ফেল)
+      // এটাকে ঢেকে দিলে সিস্টেম ভুল করে ৯০ সেকেন্ড "ট্রানজিয়েন্ট" রিট্রাই করে ভুল
+      // "ব্যস্ত" বার্তা দেখায়; আসলে সেটআপ-সমস্যা, সাথে সাথে সেটআপ-নোটিশ দেখানোই ঠিক
+      if (e instanceof GeminiError && e.message === 'NO_KEYS') noKeys = true
       console.error(`[ai-engine] ${engine} failed:`, e instanceof Error ? e.message : e)
     }
   }
-  return { result: null, blocked, err }
+  return { result: null, blocked, err, noKeys }
 }
 
 export async function generateTutorAnswer(
@@ -147,6 +154,13 @@ export async function generateTutorAnswer(
 
   // পাস ১
   let outcome = await runPass(order, prompt, system, settings, force)
+
+  // কোনো ইঞ্জিন "কী নেই" বলেছে আর ফলাফলও নেই → এটা সেটআপ-সমস্যা, ট্রানজিয়েন্ট নয়।
+  // সাথে সাথে NO_KEYS ছুঁড়ে দাও — নইলে অন্য ইঞ্জিনের জেনেরিক এররকে "ব্যস্ত" ভেবে
+  // ৯০ সেকেন্ড অর্থহীন রিট্রাই চলে আর শিক্ষার্থী ভুল "ব্যস্ত" বার্তা দেখে।
+  if (!outcome.result && outcome.noKeys) {
+    throw new GeminiError(503, 'NO_KEYS')
+  }
 
   // পাস ২+: ট্রানজিয়েন্ট ব্যর্থতা (রেট-লিমিট/ব্যস্ত/ব্রেকার) → deadline-ভিত্তিক queue:
   // - ছোট ঝামেলা হলে ছোট অপেক্ষা (jitter সহ)

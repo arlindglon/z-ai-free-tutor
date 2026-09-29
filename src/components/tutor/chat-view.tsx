@@ -266,8 +266,25 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
               : m,
           ),
         )
-      } else {
-        // টেকনিক্যাল এরর কখনো দেখাবে না — সবসময় বন্ধুত্বপূর্ণ বার্তা
+      } else if (err instanceof ApiError && err.status === 401) {
+        // সেশন শেষ — "ব্যস্ত" বার্তা দেখানো মিথ্যা হবে; পরিষ্কার কথা + লগইন-স্ক্রিনে ফেরত
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === placeholderId
+              ? {
+                  id: localId('s'),
+                  role: 'system',
+                  text: 'তোমার লগইন সেশনটা শেষ হয়ে গেছে 🙏 — আবার লগইন করে প্রশ্নটা পাঠাও।',
+                }
+              : m,
+          ),
+        )
+        setTimeout(() => onLogout(), 1500)
+      } else if (
+        err instanceof ApiError &&
+        (err.status === 503 || err.status === 429 || err.status === 502)
+      ) {
+        // সত্যিকারের ব্যস্ত — সাইলেন্ট রিট্রাই শেষেও লাইন ফাঁকা হয়নি
         setMessages((prev) =>
           prev.map((m) =>
             m.id === placeholderId
@@ -275,6 +292,28 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
                   id: localId('s'),
                   role: 'system',
                   text: 'এখন টিউটর ইঞ্জিনগুলো একটু ব্যস্ত আছে 😅 কয়েক সেকেন্ড পর আবার একই প্রশ্ন পাঠাও — তখনই উত্তর পাবে! 🙏',
+                }
+              : m,
+          ),
+        )
+      } else if (err instanceof ApiError) {
+        // ৪২২ (সেফটি) / ৫০০ / ৪০৩ — সার্ভারের আসল বাংলা বার্তাই সবচেয়ে সৎ উত্তর
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === placeholderId
+              ? { id: localId('s'), role: 'system', text: err.message }
+              : m,
+          ),
+        )
+      } else {
+        // ApiError না = fetch-লেভেল ফেল — ইন্টারনেট/সংযোগ সমস্যা
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === placeholderId
+              ? {
+                  id: localId('s'),
+                  role: 'system',
+                  text: 'ইন্টারনেট সংযোগে সমস্যা হচ্ছে যেন 😅 — সংযোগ ঠিক আছে কি না দেখে আবার একই প্রশ্ন পাঠাও! 🙏',
                 }
               : m,
           ),
