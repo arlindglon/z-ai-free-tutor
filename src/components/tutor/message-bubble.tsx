@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkMath from 'remark-math'
+import remarkGfm from 'remark-gfm'
 import rehypeKatex from 'rehype-katex'
-import { BookOpen, Square, Volume2 } from 'lucide-react'
+import { BookOpen, ChevronDown, Square, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { toBn } from '@/lib/bn'
 import { isTtsSupported, speakBengali, stopSpeaking } from '@/lib/speech'
@@ -80,22 +81,61 @@ const markdownComponents: Components = {
   ),
 }
 
-function ReferenceChips({ references }: { references: BookReference[] }) {
-  if (references.length === 0) return null
+/** শেয়ার্ড মার্কডাউন রেন্ডারার — উত্তর ও বইয়ের রেফারেন্স দুটোতেই ব্যবহৃত।
+ *  remark-gfm: টেবিল/স্ট্রাইক রেন্ডার; remark-math + KaTeX: $P^{H}$ জাতীয় ম্যাথ সুন্দর দেখায়। */
+function Markdown({ children }: { children: string }) {
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5">
-      {references.map((ref, i) => (
-        <span
-          key={`${ref.book}-${ref.chapter}-${i}`}
-          className="flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-800"
-        >
-          <BookOpen className="h-3 w-3 shrink-0" />
-          {ref.book} • {ref.chapter}
-          {ref.page !== null && ref.page !== undefined
-            ? ` • পৃষ্ঠা ${toBn(ref.page)}`
-            : ''}
-        </span>
-      ))}
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={markdownComponents}
+    >
+      {children}
+    </ReactMarkdown>
+  )
+}
+
+function ReferenceChips({ references }: { references: BookReference[] }) {
+  const [openIdx, setOpenIdx] = useState<number | null>(null)
+  if (references.length === 0) return null
+  const open = openIdx !== null ? references[openIdx] : null
+  return (
+    <div className="mt-2 flex w-full flex-col gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
+        {references.map((ref, i) => {
+          const isOpen = openIdx === i
+          return (
+            <button
+              key={`${ref.book}-${ref.chapter}-${i}`}
+              type="button"
+              onClick={() => setOpenIdx(isOpen ? null : i)}
+              aria-expanded={isOpen}
+              title="বইয়ের অংশটা দেখো"
+              className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                isOpen
+                  ? 'border-amber-300 bg-amber-100 text-amber-900'
+                  : 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+              }`}
+            >
+              <BookOpen className="h-3 w-3 shrink-0" />
+              {ref.book} • {ref.chapter}
+              {ref.page !== null && ref.page !== undefined ? ` • পৃষ্ঠা ${toBn(ref.page)}` : ''}
+              {ref.content ? (
+                <ChevronDown className={`h-3 w-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+              ) : null}
+            </button>
+          )
+        })}
+      </div>
+      {open?.content ? (
+        <div className="w-full overflow-x-auto rounded-xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-stone-800">
+          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+            📖 বইয়ের অংশ — {open.chapter}
+            {open.page !== null && open.page !== undefined ? ` (পৃষ্ঠা ${toBn(open.page)})` : ''}
+          </p>
+          <Markdown>{open.content}</Markdown>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -171,14 +211,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     <motion.div {...fade} className="flex w-full justify-start">
       <div className="flex max-w-[92%] flex-col items-start sm:max-w-[85%]">
         <div className="overflow-x-auto rounded-2xl rounded-bl-sm border border-emerald-100 bg-white px-4 py-3 text-[15px] text-stone-800 shadow-sm">
-          {/* ReactMarkdown-এর ভেতরের কনটেন্ট আমরাই স্টাইল করি; disableWarnings দরকার নেই */}
-          <ReactMarkdown
-            remarkPlugins={[remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={markdownComponents}
-          >
-            {message.text}
-          </ReactMarkdown>
+          <Markdown>{message.text}</Markdown>
         </div>
         <ReferenceChips references={message.references ?? []} />
         <div className="mt-2 flex items-center gap-2">

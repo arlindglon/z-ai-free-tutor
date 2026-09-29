@@ -17,7 +17,10 @@ export type BookReference = {
   book: string
   chapter: string
   page: number | null
+  /** ছোট প্রিভিউ (চিপের নিচে এক লাইন) */
   snippet: string
+  /** পুরো চাঙ্ক — মার্কডাউন (টেবিল/শিরোনাম) + KaTeX ম্যাথ — খুললে সুন্দর রেন্ডার হয় */
+  content?: string
 }
 
 export type ChatApiResponse = {

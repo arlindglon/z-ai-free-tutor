@@ -90,8 +90,8 @@ export async function retrieveTopK(
       book: x.r.book,
       chapter: x.r.chapter,
       page: x.r.page,
-      content: x.r.content,
       snippet: x.r.content.slice(0, 160).trim(),
+      content: x.r.content,
     }))
 }
 
@@ -322,7 +322,7 @@ export async function retrieveTopKLexical(
     book: x.r.book,
     chapter: x.r.chapter,
     page: x.r.page,
-    content: x.r.content,
     snippet: x.r.content.slice(0, 160).trim(),
+    content: x.r.content,
   }))
 }

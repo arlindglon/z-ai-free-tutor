@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
-import { parseOcrBook } from '@/lib/ocr-book'
+import { parseOcrBook, cleanOcrText } from '@/lib/ocr-book'
 import { chunkContent, chunkPages, estimatePage } from '@/lib/chunk'
 import { invalidateChunkCache } from '@/lib/rag'
 import { startAutoEmbed } from '@/lib/book-jobs'
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
           title: appendBook ? 'অব্যাহত অংশ (পৃষ্ঠা মার্কিং নেই)' : 'সম্পূর্ণ বই',
           number: null as number | null,
           pageStart: null as number | null,
-          pieces: chunkContent(text).map((p) => ({
+          pieces: chunkContent(cleanOcrText(text)).map((p) => ({
             idx: p.idx,
             content: p.content,
             page: estimatePage(p.offsetChars, null),

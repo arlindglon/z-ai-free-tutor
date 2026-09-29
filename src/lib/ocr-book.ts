@@ -31,6 +31,131 @@ const CHAPTER_KEYWORD_RE =
 /** "---" জাতীয় বিভাজক লাইন */
 const SEPARATOR_RE = /^[ \t]*(?:[-*_=]{3,}|═+|—{2,}|─{2,})[ \t]*$/
 
+/* ------------------------------------------------------------------ */
+/* মার্কডাউন/HTML/LaTeX আবর্জনা নরমালাইজার                              */
+/* Gemini-র OCR আউটপুটে টেবিল (| |), <br>, **, ###, $P^{H}$ ইত্যাদি     */
+/* মিশে থাকে — সব থাকলেই পেস্ট করা যাবে; এখানে পরিষ্কার হয়ে যায়:        */
+/*   • ভাঙা টেবিল-রো জোড়া লাগানো + অ্যালাইনমেন্ট রো নরমালাইজ            */
+/*   • <br> ও HTML এন্টিটি → পরিষ্কার লাইন                              */
+/*   • LaTeX \(x\) / \[x\] → $x$ / $$x$$ (KaTeX রেন্ডার করবে)           */
+/*   • **বোল্ড** ও ### শিরোনাম থাকে — মার্কডাউন হিসেবেই সুন্দর দেখায়     */
+/* ------------------------------------------------------------------ */
+
+const IS_TABLE_ROW_RE = /^\s*\|/
+const ALIGN_ROW_RE = /^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/
+
+/** টেবিলের প্রথম রো থেকে কলাম-সংখ্যা ধরে অ্যালাইনমেন্ট রো বানাও */
+function makeAlignRow(headerRow: string): string {
+  const cells = headerRow.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').length
+  const n = Math.max(1, cells)
+  return `| ${Array(n).fill('---').join(' | ')} |`
+}
+
+/** ভাঙা টেবিল-রো জোড়া দাও: "|" দিয়ে শুরু হয়ে "|" দিয়ে শেষ না হওয়া পর্যন্ত লাইন জোড়া */
+function mergeBrokenRows(lines: string[]): string[] {
+  const out: string[] = []
+  let row: string | null = null
+  for (const ln of lines) {
+    const t = ln.trim()
+    if (row === null) {
+      if (IS_TABLE_ROW_RE.test(t)) {
+        row = t
+        // সম্পূর্ণ রো (শেষে "|" আছে) হলে সাথে সাথেই শেষ — নইলে পরের রো-ও জোড়া লেগে যাবে
+        if (t.endsWith('|')) {
+          out.push(row)
+          row = null
+        }
+      } else {
+        out.push(ln)
+      }
+      continue
+    }
+    // ভাঙা রো চলছে — ফাঁকা লাইন স্কিপ, বাকিটা জোড়া
+    if (t) row += ' ' + t
+    if (t.endsWith('|')) {
+      out.push(row)
+      row = null
+    }
+  }
+  if (row !== null) out.push(row)
+  return out
+}
+
+/**
+ * টেবিল-ব্লক নরমালাইজ: রো জোড়া + অ্যালাইনমেন্ট রো নিশ্চিত + টেবিলের ভেতরের
+ * ফাঁকা লাইন বাদ (নইলে markdown টেবিল ভেঙে যায়)
+ */
+function normalizeTables(lines: string[]): string[] {
+  const merged = mergeBrokenRows(lines)
+  const out: string[] = []
+  for (let i = 0; i < merged.length; i++) {
+    const t = merged[i].trim()
+    if (IS_TABLE_ROW_RE.test(t)) {
+      if (ALIGN_ROW_RE.test(t)) continue // পুরনো অ্যালাইনমেন্ট রো বাদ — নিচে ক্যানোনিকাল বসবে
+      const prev = out.length ? out[out.length - 1].trim() : ''
+      const prevIsRow = IS_TABLE_ROW_RE.test(prev)
+      if (!prevIsRow) {
+        // নতুন টেবিলের হেডার — পরের লাইন অ্যালাইনমেন্ট না হলে একটা বসাও
+        const next = merged[i + 1]?.trim() ?? ''
+        out.push(t)
+        if (!IS_TABLE_ROW_RE.test(next) || ALIGN_ROW_RE.test(next) === false) {
+          out.push(makeAlignRow(t))
+        } else if (ALIGN_ROW_RE.test(next)) {
+          // পরের লাইনই অ্যালাইনমেন্ট — ক্যানোনিকাল করে নাও
+          out.push(makeAlignRow(t))
+          i++ // পুরনো অ্যালাইনমেন্ট রো স্কিপ
+        }
+        continue
+      }
+      out.push(t)
+      continue
+    }
+    // টেবিলের রো-র মাঝের ফাঁকা লাইন বাদ — আগের ও পরের দুটোই রো হলে স্কিপ
+    if (!t) {
+      const before = out.length ? out[out.length - 1].trim() : ''
+      const after = merged[i + 1]?.trim() ?? ''
+      if (IS_TABLE_ROW_RE.test(before) && IS_TABLE_ROW_RE.test(after)) continue
+    }
+    out.push(merged[i])
+  }
+  return out
+}
+
+/**
+ * Gemini OCR টেক্সট পরিষ্কার — টেবিল/<br>/এন্টিটি/ল্যাটেক্স নরমালাইজ।
+ * আউটপুট পরিষ্কার মার্কডাউন: react-markdown + remark-gfm + KaTeX দিয়ে সুন্দর রেন্ডার হয়।
+ */
+export function cleanOcrText(raw: string): string {
+  let t = raw.replace(/\r\n?/g, '\n')
+
+  // HTML: <br> → নিউলাইন (রো-জোড়ার পরে টেবিলের বাইরে ফাঁকা লাইন হয়ে যায়), এন্টিটি → অক্ষর
+  t = t
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+
+  // LaTeX ডিলিমিটার নরমালাইজ — $...$ যেমন আছে তেমনই থাকে (KaTeX পারে)
+  t = t
+    .replace(/\\\((.+?)\\\)/g, '$$$1$$')
+    .replace(/\\\[([\s\S]+?)\\\]/g, '$$$$1$$')
+
+  // লাইন-ভিত্তিক পরিষ্কার: টেবিল নরমালাইজ, প্রান্তের ফাঁকা কমানো, অবশিষ্ট বিভাজক বাদ
+  t = normalizeTables(t.split('\n'))
+    .map((ln) => ln.replace(/[ \t]+$/g, ''))
+    .filter((ln, i, arr) => !(ln.trim() === '' && (i === 0 || i === arr.length - 1)))
+    .filter((ln) => !SEPARATOR_RE.test(ln) && !/^[ \t]*--{1,2}[ \t]*$/.test(ln))
+    .join('\n')
+
+  // ৩+ নিউলাইন → ২ (প্যারা কাঠামো থাকবে)
+  t = t.replace(/\n{3,}/g, '\n\n')
+
+  return t.trim()
+}
+
 export type OcrPage = { page: number; text: string }
 
 export type OcrChapter = {
@@ -120,6 +245,7 @@ export function parseOcrBook(raw: string): OcrParseResult {
   }
 
   // ২) পৃষ্ঠা ভাগ — দুই মার্কারের মাঝের লেখা এক পৃষ্ঠা ("---" বিভাজক বাদ)
+  //    প্রতিটি পৃষ্ঠার টেক্সট সাথে সাথেই পরিষ্কার — টেবিল/<br>/ল্যাটেক্স নরমালাইজ হয়ে যায়
   const pages: OcrPage[] = []
   for (let k = 0; k < markers.length; k++) {
     const from = markers[k].line + 1
@@ -129,7 +255,7 @@ export function parseOcrBook(raw: string): OcrParseResult {
       .filter((ln) => !SEPARATOR_RE.test(ln))
       .join('\n')
       .trim()
-    if (body) pages.push({ page: markers[k].page, text: body })
+    if (body) pages.push({ page: markers[k].page, text: cleanOcrText(body) })
   }
   if (pages.length === 0) {
     return {

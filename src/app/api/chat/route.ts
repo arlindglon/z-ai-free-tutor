@@ -163,6 +163,7 @@ export async function POST(req: NextRequest) {
       chapter: r.chapter,
       page: r.page,
       snippet: r.snippet,
+      content: r.content,
     }))
 
     // ৬) উত্তর যে মডেল দিয়েছে তার স্বাক্ষর পুল থেকে র‍্যান্ডম নাম — স্টুডেন্ট নাম দেখবে
