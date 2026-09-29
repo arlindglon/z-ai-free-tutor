@@ -6,7 +6,15 @@ import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
 import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
 import { pickModelAlias, resolveAliasTarget } from '@/lib/models'
-import { retrieveTopK, retrieveTopKLexical, RAG_REFUSAL_TEXT, RAG_UNGROUNDED_TEXT, answerGroundedInBook, bookCoverage } from '@/lib/rag'
+import {
+  retrieveTopK,
+  retrieveTopKLexical,
+  RAG_REFUSAL_TEXT,
+  RAG_UNGROUNDED_TEXT,
+  answerGroundedInBook,
+  bookCoverage,
+  isCleanRefusal,
+} from '@/lib/rag'
 import { GeminiError, isTransientAiError } from '@/lib/keypool'
 
 /**
@@ -158,13 +166,25 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    const references = refs.map((r) => ({
-      book: r.book,
-      chapter: r.chapter,
-      page: r.page,
-      snippet: r.snippet,
-      content: r.content,
-    }))
+    // রেফারেন্স চিপ পরিষ্কার:
+    // ১) মডেল নিজেই পরিষ্কার প্রত্যাখ্যান লিখেছে ("পাইনি 📖") → রেফারেন্স থাকে না —
+    //    "পাইনি" বলা উত্তরের নিচে বইয়ের অংশের চিপ দেখালে ছাত্র বিভ্রান্ত হয়
+    // ২) নইলে একই বই+অধ্যায়+পৃষ্ঠার একাধিক চাঙ্ক = একটাই চিপ (ডুপ্লিকেট বাদ) + পৃষ্ঠা-ক্রমে
+    const dedupedRefs = refs.filter((r, i) => {
+      const key = `${r.book}|${r.chapter}|${r.page ?? 'x'}`
+      return refs.findIndex((o) => `${o.book}|${o.chapter}|${o.page ?? 'x'}` === key) === i
+    })
+    const references = isCleanRefusal(result.text)
+      ? []
+      : [...dedupedRefs]
+          .sort((a, b) => (a.page ?? 9999) - (b.page ?? 9999))
+          .map((r) => ({
+            book: r.book,
+            chapter: r.chapter,
+            page: r.page,
+            snippet: r.snippet,
+            content: r.content,
+          }))
 
     // ৬) উত্তর যে মডেল দিয়েছে তার স্বাক্ষর পুল থেকে র‍্যান্ডম নাম — স্টুডেন্ট নাম দেখবে
     // (আসল মডেল বুঝবে না), অ্যাডমিন নাম দেখে মডেল ধরতে পারবে। পুল খালি হলে স্বাক্ষর নেই।

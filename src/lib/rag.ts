@@ -68,7 +68,35 @@ function cosine(a: number[], b: number[]): number {
 
 const SIMILARITY_THRESHOLD = 0.3
 
-/** প্রশ্নের ভেক্টরের সাথে সবচেয়ে প্রাসঙ্গিক k-টি বইয়ের অংশ */
+/**
+ * পৃষ্ঠা-বৈচিত্র্য: স্কোর-সর্টেড প্রার্থীদের থেকে টপ-k বাছাই, তবে একই বই+অধ্যায়+পৃষ্ঠার
+ * একাধিক চাঙ্ক একসাথে জায়গা নেবে না — এক পৃষ্ঠার দুটো চাঙ্ক টপ-৩ নিলে মডেল বইয়ের
+ * একই জায়গাই দুবার দেখে (উত্তর-মিসের বড় কারণ), আর ছাত্রের কাছে ডুপ্লিকেট চিপ দেখায়।
+ * ভিন্ন পৃষ্ঠা k-টা না মিললে বাকি সেরা স্কোর দিয়ে পূরণ হয়।
+ */
+function pickDiverse<
+  T extends { r: { book: string; chapter: string; page: number | null } }
+>(scored: T[], k: number): T[] {
+  const seen = new Set<string>()
+  const picked: T[] = []
+  const rest: T[] = []
+  for (const x of scored) {
+    const key = `${x.r.book}|${x.r.chapter}|${x.r.page ?? 'x'}`
+    if (picked.length < k && !seen.has(key)) {
+      seen.add(key)
+      picked.push(x)
+    } else {
+      rest.push(x)
+    }
+  }
+  for (const x of rest) {
+    if (picked.length >= k) break
+    picked.push(x)
+  }
+  return picked
+}
+
+/** প্রশ্নের ভেক্টরের সাথে সবচেয়ে প্রাসঙ্গিক k-টি বইয়ের অংশ (পৃষ্ঠা-বৈচিত্র্যসহ) */
 export async function retrieveTopK(
   queryVec: number[],
   subject: string | null | undefined,
@@ -81,18 +109,19 @@ export async function retrieveTopK(
   const pool = subject ? rows.filter((r) => r.subject === subject) : rows
   const candidates = pool.length ? pool : rows // বিষয়ে কিছু না পেলে সব বই দেখো
 
-  return candidates
-    .map((r) => ({ r, score: cosine(queryVec, r.embedding) }))
-    .filter((x) => x.score >= SIMILARITY_THRESHOLD)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, k)
-    .map((x) => ({
-      book: x.r.book,
-      chapter: x.r.chapter,
-      page: x.r.page,
-      snippet: x.r.content.slice(0, 160).trim(),
-      content: x.r.content,
-    }))
+  return pickDiverse(
+    candidates
+      .map((r) => ({ r, score: cosine(queryVec, r.embedding) }))
+      .filter((x) => x.score >= SIMILARITY_THRESHOLD)
+      .sort((a, b) => b.score - a.score),
+    k
+  ).map((x) => ({
+    book: x.r.book,
+    chapter: x.r.chapter,
+    page: x.r.page,
+    snippet: x.r.content.slice(0, 160).trim(),
+    content: x.r.content,
+  }))
 }
 
 /* ------------------------------------------------------------------ */
@@ -220,13 +249,22 @@ export function bookCoverage(
   return score / answerTokens.length
 }
 
+/**
+ * মডেল নিজেই পরিষ্কার প্রত্যাখ্যান লিখেছে কি না ("পাইনি/নেই" জাতীয়, কোনো রেফারেন্স-ফুটার ছাড়া)।
+ * এমন উত্তরের সাথে রেফারেন্স চিপ দেখানো বিভ্রান্তিকর — "পাইনি" বলা উত্তরের সাথে
+ * বইয়ের অংশ থাকে না; তাই চ্যাট-রুটে এগুলোর রেফারেন্স ফাঁকা রাখা হয়।
+ */
+export function isCleanRefusal(answerText: string): boolean {
+  return REFUSAL_PATTERN.test(answerText) && !/বইয়ের\s*রেফারেন্স/.test(answerText)
+}
+
 export function answerGroundedInBook(
   answerText: string,
   refs: Pick<RetrievedChunk, 'content' | 'book' | 'chapter' | 'page'>[],
   threshold = 0.45
 ): boolean {
   // ১) পরিষ্কার প্রত্যাখ্যান — ফুটার না থাকলে বৈধ (ফুটার+প্রত্যাখ্যান মিশ্রণ হলে নিচে যাচাই হবে)
-  if (REFUSAL_PATTERN.test(answerText) && !/বইয়ের\s*রেফারেন্স/.test(answerText)) return true
+  if (isCleanRefusal(answerText)) return true
   // ২) লেক্সিক্যাল grounding — বানানো তথ্যের কভারেজ কম হয়
   return bookCoverage(answerText, refs) >= threshold
 }
@@ -316,9 +354,8 @@ export async function retrieveTopKLexical(
     // ২+ টার্ম মিললে, অথবা একটি বিরল টার্ম (যেমন "সালোকসংশ্লেষণ") মিললে
     .filter((x) => x.score > 0.8 && (x.matched >= 2 || x.rareHit))
     .sort((a, b) => b.score - a.score)
-    .slice(0, k)
 
-  return scored.map((x) => ({
+  return pickDiverse(scored, k).map((x) => ({
     book: x.r.book,
     chapter: x.r.chapter,
     page: x.r.page,
