@@ -27,8 +27,9 @@ const SEMANTIC_SCAN_LIMIT = 300
 export function normalizeQuestion(q: string): string {
   return q
     .toLowerCase()
+    .replace(/[-–—_/\\|]/g, ' ') // হাইফেন-জাতীয় = স্পেস ("FCR-এর" ↔ "FCR এর")
     .replace(/\s+/g, ' ')
-    .replace(/[।,;:!?'"()\[\]{}\-–—…."]/g, '')
+    .replace(/[।,;:!?'"()\[\]{}…."]/g, '')
     .replace(/[?؟]/g, '')
     .replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)))
     .trim()

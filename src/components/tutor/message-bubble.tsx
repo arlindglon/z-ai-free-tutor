@@ -64,6 +64,23 @@ function SvgBlock({ code }: { code: string }) {
   )
 }
 
+/** মডেল-তৈরি mermaid-এর সবচেয়ে সাধারণ ভাঙা-সিনট্যাক্স রিপেয়ার:
+ *  ব্র্যাকেট-লেবেলের ভেতরে প্যারেন্থেসিস/ব্রেস থাকলে mermaid পার্স-ফেল করে
+ *  (যেমন A[বাষ্পীভবন (Evaporation)]) — লেবেলটা ডাবল-কোটে মুড়িয়ে দিলে চলে:
+ *  A[বাষ্পীভবন (Evaporation)] → A["বাষ্পীভবন (Evaporation)"]
+ *  (mermaid v12-তে সিঙ্গেল-কোট লেবেল চলে না — ডাবল-কোটই সঠিক সিনট্যাক্স) */
+function repairMermaid(code: string): string {
+  return code
+    .split('\n')
+    .map((line) =>
+      line.replace(
+        /\[([^\]"]*[(){}][^\]"]*)\]/g,
+        (_m, inner: string) => `["${inner.replace(/"/g, '\u2019')}"]`
+      )
+    )
+    .join('\n')
+}
+
 /** 🎨 Mermaid ডায়াগ্রাম — ক্লায়েন্ট-লাইব্রেরি রেন্ডার করে (dymanic import — বান্ডল ভারী হয় না) */
 function MermaidBlock({ code }: { code: string }) {
   const [svg, setSvg] = useState<string | null>(null)
@@ -81,7 +98,13 @@ function MermaidBlock({ code }: { code: string }) {
           fontFamily: 'inherit',
         })
         const id = `mmd-${Math.random().toString(36).slice(2)}`
-        const { svg: rendered } = await mermaid.render(id, code)
+        // আগে রিপেয়ার-করা কোড, ফেল করলে মূল কোড — দুইবার সুযোগ
+        let rendered: string
+        try {
+          ;({ svg: rendered } = await mermaid.render(id, repairMermaid(code)))
+        } catch {
+          ;({ svg: rendered } = await mermaid.render(`${id}-raw`, code))
+        }
         if (alive) setSvg(rendered)
       } catch {
         if (alive) setFailed(true)

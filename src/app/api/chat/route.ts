@@ -8,15 +8,19 @@ import { generateTutorAnswer } from '@/lib/ai-engine'
 import { findCachedAnswer, recordCacheHit, saveToCache, type CachedAnswer } from '@/lib/answer-cache'
 import { pickModelAlias, resolveAliasTarget } from '@/lib/models'
 import {
-  retrieveTopK,
-  retrieveTopKLexical,
+  retrieveHybrid,
   RAG_REFUSAL_TEXT,
   RAG_UNGROUNDED_TEXT,
   answerGroundedInBook,
   bookCoverage,
   isCleanRefusal,
 } from '@/lib/rag'
+import { countMixedScriptWords } from '@/lib/bn'
 import { GeminiError, isTransientAiError } from '@/lib/keypool'
+
+/** মিশ্র-লিপি দূষিত উত্তর পেলে রি-জেনারেশনের সময় সিস্টেম-প্রম্পটে জোড়া হয় */
+const MIXED_SCRIPT_WARNING =
+  '\n\n⚠️ বানান-সতর্কতা: তোমার আগের উত্তরে বাংলা শব্দের ভেতরে ইংরেজি অক্ষর মিশে গিয়েছিল (যেমন "খoló" — সঠিক হয় "খোলা")। এবার প্রতিটি শব্দ সম্পূর্ণ বাংলা লিপিতে, সঠিক বানানে লিখবে। সংখ্যা, সূত্র আর সংক্ষিপ্ত রূপের ইংরেজি যেমন আছে তেমনই থাকবে।'
 
 /**
  * মূল ডাটা-ফ্লো:
@@ -108,20 +112,19 @@ export async function POST(req: NextRequest) {
       if (exact) return await serveFromCache(exact)
     }
 
-    // ২+৩) রিট্রিভাল: ভেক্টর (Gemini) চললে ভেক্টর, না চললে TF-IDF লেক্সিকাল —
-    // রিট্রিভাল কখনোই উত্তর আটকাবে না
+    // ২+৩) হাইব্রিড রিট্রিভাল: ভেক্টর (Gemini) + লেক্সিকাল (TF-IDF) দুটোই চলে —
+    // সংক্ষিপ্তরূপ/বিরল-শব্দের প্রশ্ন ("FCR-এর পূর্ণরূপ") ভেক্টরে দুর্বল মিলেও
+    // লেক্সিকালে হুবহু ধরা পড়ে। রিট্রিভাল কখনোই উত্তর আটকাবে না।
     let queryVec: number[] | null = null
-    let refs: Awaited<ReturnType<typeof retrieveTopK>> = []
     try {
       queryVec = await embedQuery(question, settings.embeddingModel)
-      refs = await retrieveTopK(queryVec, subject, 3)
     } catch (retrievalErr) {
       console.error(
-        '[chat] vector retrieval unavailable → lexical fallback:',
+        '[chat] vector embedding unavailable → lexical-only retrieval:',
         retrievalErr instanceof Error ? retrievalErr.message : retrievalErr
       )
-      refs = await retrieveTopKLexical(question, subject, 3)
     }
+    const refs = await retrieveHybrid(question, queryVec, subject, 3)
 
     // ⚡ স্তর ২: এমবেডিং-সাদৃশ্য ক্যাশ (cosine ≥ ০.৯৫) — ছোট-বড় ভুল-বানান/শব্দ-ক্রমেও হিট
     if (!image && queryVec) {
@@ -181,13 +184,42 @@ export async function POST(req: NextRequest) {
     // 📸 ছবি-প্রশ্নে লক-প্রোটোকল বন্ধ — ছবিই ভিত্তি
     // স্বাক্ষর-রাউটিং: প্রশ্নে অ্যাডমিনের দেওয়া কোড/নাম থাকলে সেই মডেল সবার আগে চেষ্টা হয়
     const aliasTarget = await resolveAliasTarget(question)
-    const result = await generateTutorAnswer(
+    let result = await generateTutorAnswer(
       prompt,
       buildSystemPrompt({ ragOnly: settings.ragOnlyMode && !image }),
       settings,
       aliasTarget ?? undefined,
       image ?? undefined
     )
+
+    // 🧹 মিশ্র-লিপি রক্ষা: ছোট ফ্রি মডেল মাঝে মাঝে "খoló" (খোলা) জাতীয় বাংলা-ইংরেজি
+    // মিশ্র শব্দ লেখে — ছাত্র পড়তে পারে না। দূষণ ধরা পড়লে একবার জোর-নির্দেশসহ
+    // আবার চেষ্টা; দুটোর মধ্যে পরিষ্কারটা রাখো (রিট্রাই ফেল করলেও আগের উত্তর যাবেই)।
+    if (!image && !isCleanRefusal(result.text)) {
+      const dirty = countMixedScriptWords(result.text)
+      if (dirty > 0) {
+        try {
+          const retry = await generateTutorAnswer(
+            prompt,
+            buildSystemPrompt({ ragOnly: settings.ragOnlyMode && !image }) + MIXED_SCRIPT_WARNING,
+            settings,
+            aliasTarget ?? undefined
+          )
+          if (
+            !retry.blocked &&
+            retry.text.trim() &&
+            countMixedScriptWords(retry.text) < dirty
+          ) {
+            console.warn(
+              `[chat] mixed-script repair: ${dirty} → ${countMixedScriptWords(retry.text)} দূষিত শব্দ`
+            )
+            result = retry
+          }
+        } catch {
+          // রিট্রাই ফেল = আগের উত্তরই থাকবে
+        }
+      }
+    }
 
     if (result.blocked || !result.text.trim()) {
       if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
@@ -256,8 +288,9 @@ export async function POST(req: NextRequest) {
     // আসল ইঞ্জিন/মডেল শুধু DB-তে অডিটের জন্য জমা হয় — রেসপনসে ফাঁস হয় না।
     const answerTag = await pickModelAlias(result.modelId)
 
-    // ⚡ সফল, প্রত্যাখ্যান-বিহীন টেক্সট-উত্তর ক্যাশে জমা — পরের রিপিট-প্রশ্ন = খরচ শূন্য
-    if (!image && !isCleanRefusal(result.text)) {
+    // ⚡ সফল, প্রত্যাখ্যান-বিহীন, মিশ্র-লিপি-মুক্ত টেক্সট-উত্তর ক্যাশে জমা —
+    // দূষিত উত্তর ক্যাশে গেলে রিপিট-প্রশ্নেও দূষিতই ফেরত যেত
+    if (!image && !isCleanRefusal(result.text) && countMixedScriptWords(result.text) === 0) {
       await saveToCache({
         question,
         answer: result.text,

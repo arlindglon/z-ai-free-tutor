@@ -127,6 +127,9 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
   const listenRef = useRef<{ stop: () => void } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // ডাবল-সেন্ড রেস-গার্ড: দ্রুত দুবার Enter/ট্যাপে loading-state স্টেল থাকে —
+  // ref-গার্ড সিনক্রোনাস, তাই একই প্রশ্ন দুবার যাওয়া অসম্ভব (লাইভ-রিপোর্টে ডুপ্লিকেট বাবল এসেছিল)
+  const sendingRef = useRef(false)
 
   // ইতিহাস + প্রাথমিক ক্রেডিট + STT সাপোর্ট যাচাই
   useEffect(() => {
@@ -194,6 +197,8 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
     // 📸 ছবি-প্রশ্ন: লেখা ছাড়াও চলবে (ছবিতেই প্রশ্ন থাকে); দুটোই খালি হলে কিছু হয় না
     const image = attachedImage
     if ((!text && !image) || loading || historyLoading) return
+    if (sendingRef.current) return // চলমান পাঠানোর মাঝেই দ্বিতীয় Enter/ট্যাপ = উপেক্ষা
+    sendingRef.current = true
 
     setInput('')
     setMicError(null)
@@ -334,6 +339,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
     } finally {
       setEngineBusy(false)
       setLoading(false)
+      sendingRef.current = false
     }
   }
 

@@ -392,3 +392,52 @@ export async function retrieveTopKLexical(
     content: x.r.content,
   }))
 }
+
+/* ------------------------------------------------------------------ */
+/* হাইব্রিড রিট্রিভাল — ভেক্টর + লেক্সিকাল দুটোই সবসময়, ফল জোড়া        */
+/*                                                                     */
+/* লাইভ-ব্যর্থতা (FCR কেস): "FCR-এর পূর্ণরূপ কী?" — বইয়ে "খাদ্য রূপান্তর  */
+/* হার বা FCR (Food Conversion Ratio)" স্পষ্ট থাকা সত্ত্বেও ভেক্টর-মিল    */
+/* দুর্বল (সংক্ষিপ্তরূপ-প্রশ্নের সেমান্টিক গ্যাপ) → শুধু-ভেক্টর পথে refs    */
+/* খালি → ভুল "পাইনি 📖"। লেক্সিকাল পথ "fcr" বিরল-টার্মে হুবহু মিলত।      */
+/* তাই এখন দুই ইঞ্জিনই সবসময় চলে — উভয়-মেলা চাঙ্ক আগে, তারপর ভেক্টর-একা, */
+/* তারপর লেক্সিকাল-একা। কোনো এক পথ ফেল করলেও অন্য পথ রেফারেন্স দেয়।     */
+/* ------------------------------------------------------------------ */
+
+const chunkKey = (r: RetrievedChunk) => `${r.book}|${r.chapter}|${r.page ?? 'x'}|${r.content.slice(0, 80)}`
+
+export async function retrieveHybrid(
+  question: string,
+  queryVec: number[] | null,
+  subject: string | null | undefined,
+  k = 3
+): Promise<RetrievedChunk[]> {
+  const [vecRefs, lexRefs] = await Promise.all([
+    queryVec && queryVec.length > 0
+      ? retrieveTopK(queryVec, subject, k).catch(() => [] as RetrievedChunk[])
+      : Promise.resolve([] as RetrievedChunk[]),
+    retrieveTopKLexical(question, subject, k).catch(() => [] as RetrievedChunk[]),
+  ])
+
+  if (!vecRefs.length) return lexRefs.slice(0, k)
+  if (!lexRefs.length) return vecRefs.slice(0, k)
+
+  const lexSet = new Set(lexRefs.map(chunkKey))
+  // স্কোর = শুধু ক্রম-রক্ষার সিনথেটিক মান (উভয়-মেলা > ভেক্টর-একা > লেক্সিকাল-একা)
+  const scored: { r: RetrievedChunk; score: number }[] = []
+  let i = 0
+  for (const r of vecRefs) {
+    scored.push({ r, score: lexSet.has(chunkKey(r)) ? 3000 - i : 2000 - i })
+    i++
+  }
+  i = 0
+  for (const r of lexRefs) {
+    if (!vecRefs.some((v) => chunkKey(v) === chunkKey(r))) {
+      scored.push({ r, score: 1000 - i })
+    }
+    i++
+  }
+
+  scored.sort((a, b) => b.score - a.score)
+  return pickDiverse(scored, k).map((x) => x.r)
+}
