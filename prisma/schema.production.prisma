@@ -126,7 +126,8 @@ model AnswerCache {
   hits           Int       @default(0)
   createdAt      DateTime  @default(now())
   lastHitAt      DateTime?
-  @@index([qNorm])
+  // MySQL: Text-ফিল্ডে সরাসরি ইনডেক্স নেওয়া যায় না — ১৯১-অক্ষর prefix ইনডেক্স (utf8mb4-safe)
+  @@index([qNorm(length: 191)])
   @@index([embeddingModel, createdAt])
 }
 

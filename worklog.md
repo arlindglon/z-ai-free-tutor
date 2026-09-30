@@ -621,3 +621,23 @@ Stage Summary:
 - "বইয়ে আছে অথচ পাইনি" শ্রেণির বাগ এখন দ্বিগুণ সুরক্ষিত — ভেক্টর-মিল দুর্বল হলে লেক্সিকাল-হিট উত্তর বাঁচায় (সংক্ষিপ্তরূপ/বিরল-শব্দ/নুক্তা-ভেদ সব)
 - ছাত্রের পড়ার অভিজ্ঞতা: মিশ্র-লিপি উত্তর অটো-মেরামত, ভাঙা ডায়াগ্রাম-কোড অটো-রেন্ডার, ডুপ্লিকেট পাঠানো বন্ধ
 - শিক্ষা: mermaid v12-তে লেবেলে প্যারেন্থেসিস = ডাবল-কোট বাধ্যতামূলক; মডেল-আউটপুট কখনো সিনট্যাক্স-নিশ্চল নয় — রেন্ডারারেই রিপেয়ার-স্তর রাখা জরুরি
+
+---
+Task ID: 11
+Agent: main (Z.ai Code)
+Task: উত্তর-ক্যাশ ফিচার ফেরত + Vercel বিল্ড-ফেইল (P1012) রুট-ফিক্স
+
+Work Log:
+- ইউজার রিপোর্ট: Vercel বিল্ড ফেল — P1012 "You cannot define an index on fields with native type Text of MySQL" → schema.production.prisma:129 @@index([qNorm])
+- রুট-কজ নিশ্চিত: আগের session-এর commit 7c1fcd9-এ AnswerCache.qNorm (MySQL @db.Text)-এর উপর সরাসরি ইনডেক্স — MySQL-এ অবৈধ → prisma generate-ই ফেল → বিল্ড কখনো হয়নি → প্রোডাকশনে পুরনো কোড চলছিল (FCR 'পাইনি' রিপিটের আসল কারণ — হাইব্রিড-রিট্রিভাল ফিক্স ডেপ্লয়ই হয়নি)
+- প্রথমে ইউজারের অনুরোধে ক্যাশ-ফিচার সম্পূর্ণ সরানো হয়েছিল; পরে ইউজার বলায় ("cache features abar add koro jodi ota vercel er karone problem hoye thake") git (7c1fcd9) থেকে ৯ ফাইল হুবহু ফেরত: answer-cache.ts, chat/route.ts, admin/stats/route.ts, stats-tab.tsx, message-bubble.tsx, chat-view.tsx, types.ts, schema.prisma, schema.production.prisma
+- 🔧 মূল ফিক্স: schema.production.prisma-তে @@index([qNorm]) → @@index([qNorm(length: 191)]) — MySQL Text-এর prefix-ইনডেক্স (utf8mb4-safe ৭৬৪B < ৩০৭২B লিমিট)
+- ভেরিফিকেশন: prisma validate (production schema, mysql URL) ✓; prisma generate (production schema) ✓; bun run lint ✓; লোকাল db:push (sqlite) ✓
+- লোকাল E2E (API-স্তর): অ্যাডমিন-সিড → লগইন 200 → chat POST "১ কিলোগ্রামে কত গ্রাম?" → ইঞ্জিন-উত্তর; একই প্রশ্ন ২য়বার → cached:True + ০.১৯৯ সেকেন্ড (ইঞ্জিন-কল নেই); /api/admin/stats → cachedAnswers:1, cacheHits:1
+- ব্রাউজার: হোমপেজ রেন্ডার ✓, অ্যাডমিন-লগইন → ড্যাশবোর্ড + ট্যাবস ✓, পরিসংখ্যান-ট্যাব রেন্ডার ✓ (sandbox বারবার dev-সার্ভার রিপ করায় কার্ড-স্ন্যাপশট ধরা পড়েনি — API-JSON-ই কার্ডের ডেটা)
+- নোট: sandbox-এ dev সার্ভার প্রতি tool-call শেষে মারা যায়; NODE_OPTIONS=--max-old-space-size=1536 + curl-ওয়ার্মিং আগে, Chrome পরে — এই প্যাটার্নেই টেস্ট করতে হয়
+
+Stage Summary:
+- ⚡ উত্তর-ক্যাশ ফিচার সম্পূর্ণ ফেরত (exact-match + embedding cosine ≥ ০.৯৫; প্রত্যাখ্যান/ছবি-প্রশ্ন/দূষিত উত্তর ক্যাশ হয় না; ক্যাশ-হিটে ক্রেডিট ফেরত)
+- Vercel বিল্ড-ব্লকার সমাধান: Text-prefix ইনডেক্স — এবার বিল্ড পাস করবে এবং 7c1fcd9-এর বাকি ফিক্সগুলোও (FCR হাইব্রিড-রিট্রিভাল, মিশ্র-লিপি রিপেয়ার, 📸 ছবি-প্রশ্ন, 🎨 SVG/Mermaid) প্রথমবার প্রোডাকশনে যাবে
+- শিক্ষা: প্রোডাকশন-স্কিমা বদলালে লোকালেই `DATABASE_URL=mysql://dummy bunx prisma validate --schema prisma/schema.production.prisma` চালিয়ে যাচাই বাধ্যতামূলক
