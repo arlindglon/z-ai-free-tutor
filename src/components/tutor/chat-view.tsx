@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   GraduationCap,
+  ImagePlus,
   Loader2,
   LogOut,
   Mic,
   SendHorizonal,
+  X,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,6 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api, ApiError } from '@/lib/api'
 import { SUBJECTS, toBn } from '@/lib/bn'
+import { compressImage } from '@/lib/image-compress'
 import { isSttSupported, startListening, stopSpeaking } from '@/lib/speech'
 import type {
   ChatApiResponse,
@@ -116,10 +119,14 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
   const [micError, setMicError] = useState<string | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
   const [sttOk, setSttOk] = useState(false)
+  // 📸 সংযুক্ত ছবি (ক্লায়েন্ট-সাইডে 1024px JPEG 80% কম্প্রেস করা data URL)
+  const [attachedImage, setAttachedImage] = useState<string | null>(null)
+  const [imageBusy, setImageBusy] = useState(false)
 
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const listenRef = useRef<{ stop: () => void } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   // ইতিহাস + প্রাথমিক ক্রেডিট + STT সাপোর্ট যাচাই
   useEffect(() => {
@@ -184,11 +191,14 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
 
   const send = async (raw: string) => {
     const text = raw.trim()
-    if (!text || loading || historyLoading) return
+    // 📸 ছবি-প্রশ্ন: লেখা ছাড়াও চলবে (ছবিতেই প্রশ্ন থাকে); দুটোই খালি হলে কিছু হয় না
+    const image = attachedImage
+    if ((!text && !image) || loading || historyLoading) return
 
     setInput('')
     setMicError(null)
-    const userMsg: ChatMessage = { id: localId('u'), role: 'user', text }
+    setAttachedImage(null)
+    const userMsg: ChatMessage = { id: localId('u'), role: 'user', text, image: image ?? undefined }
     const placeholderId = localId('p')
     setMessages((prev) => [
       ...prev,
@@ -198,8 +208,9 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
     setLoading(true)
 
     try {
-      const body: { question: string; subject?: string } = { question: text }
+      const body: { question: string; subject?: string; image?: string } = { question: text }
       if (subject !== ALL_SUBJECTS) body.subject = subject
+      if (image) body.image = image // একই request pipeline — ছবি-প্রশ্নও ১টাই request
 
       // ব্যস্ত (503/429) হলে নিঃশব্দে আবার চেষ্টা — queue-র মতো, এরর দেখায় না
       let data: ChatApiResponse | null = null
@@ -235,6 +246,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
                       ? data.references
                       : undefined,
                   answerTag: data.answerTag ?? undefined,
+                  cached: data.cached === true,
                 }
               : m,
           ),
@@ -370,6 +382,27 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
     }
   }
 
+  // 📸 ছবি বাছাই → সাথে সাথে কম্প্রেস (1024px + JPEG 80%) — আপলোডের আগেই token খরচ ~৭০% কমে
+  const pickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // একই ছবি আবার বাছলেও কাজ করবে
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setMicError('শুধু ছবির ফাইল পাঠানো যায় (JPG/PNG/WebP)।')
+      return
+    }
+    setMicError(null)
+    setImageBusy(true)
+    try {
+      const dataUrl = await compressImage(file)
+      setAttachedImage(dataUrl)
+    } catch {
+      setMicError('ছবিটা খোলা গেল না — অন্য ছবি দেখো।')
+    } finally {
+      setImageBusy(false)
+    }
+  }
+
   const showSuggestions =
     !historyLoading && messages.length === 1 && messages[0]?.id === WELCOME_ID
 
@@ -448,7 +481,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
             <HistorySkeleton />
           ) : (
             messages
-              .filter((m) => m.text.trim() !== '') // ফাঁকা প্লেসহোল্ডার বাদ — নিচে TypingDots-ই দেখায়
+              .filter((m) => m.text.trim() !== '' || !!m.image) // ফাঁকা প্লেসহোল্ডার বাদ — ছবি-বার্তা থাকবে
               .map((m) => <MessageBubble key={m.id} message={m} />)
           )}
 
@@ -482,6 +515,29 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
       {/* ইনপুট বার */}
       <footer className="sticky bottom-0 z-20 border-t border-emerald-100 bg-white/95 backdrop-blur">
         <div className="mx-auto w-full max-w-4xl px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          {/* 📸 সংযুক্ত ছবির প্রিভিউ */}
+          {attachedImage && (
+            <div className="mb-2 flex items-center gap-2 rounded-xl border border-emerald-100 bg-white p-2 shadow-sm">
+              <img
+                src={attachedImage}
+                alt="সংযুক্ত ছবি"
+                className="h-12 w-12 rounded-lg border border-emerald-100 object-cover"
+              />
+              <p className="text-xs leading-snug text-stone-500">
+                ছবি প্রস্তুত ✓ — সাথে প্রশ্ন লিখো (অথবা লেখা ছাড়াই পাঠাও)
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setAttachedImage(null)}
+                aria-label="ছবি বাদ দাও"
+                className="ms-auto h-9 w-9 shrink-0 rounded-full text-stone-400 hover:bg-rose-50 hover:text-rose-600"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
           {micError && (
             <p className="px-1 pb-1 text-xs text-rose-600">{micError}</p>
           )}
@@ -495,6 +551,30 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
             </p>
           )}
           <div className="flex items-end gap-2">
+            {/* 📸 ছবি-প্রশ্ন — বই/খাতা/প্রশ্নপত্রের ছবি তুলে পাঠাও */}
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={loading || imageBusy}
+              aria-label="ছবি পাঠাও"
+              title="ছবি তুলে প্রশ্ন পাঠাও — বইয়ের পেজ, অঙ্কের ছবি, প্রশ্নপত্র"
+              className="h-11 w-11 shrink-0 rounded-full border-stone-200 text-stone-600 hover:bg-emerald-50 hover:text-emerald-700"
+            >
+              {imageBusy ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <ImagePlus className="h-5 w-5" />
+              )}
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => void pickImage(e)}
+            />
             {sttOk && (
               <Button
                 type="button"
@@ -525,7 +605,7 @@ export function ChatView({ user, onLogout }: ChatViewProps) {
               type="button"
               size="icon"
               onClick={() => void send(input)}
-              disabled={loading || !input.trim()}
+              disabled={loading || (!input.trim() && !attachedImage)}
               aria-label="প্রশ্ন পাঠাও"
               className="h-11 w-11 shrink-0 rounded-full bg-emerald-600 text-white hover:bg-emerald-700"
             >

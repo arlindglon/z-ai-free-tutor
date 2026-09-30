@@ -107,6 +107,25 @@ model Chunk {
   @@index([embedded])
 }
 
+// ⚡ উত্তর-ক্যাশ — রিপিট প্রশ্নে ইঞ্জিন-কল ছাড়াই উত্তর (API খরচ শূন্য)
+// মিল: হুবহু-নরমালাইজড প্রশ্ন (qNorm) অথবা এমবেডিং cosine সাদৃশ্য ≥ ০.৯৫
+model AnswerCache {
+  id             String    @id @default(cuid())
+  question       String // মূল প্রশ্ন (অ্যাডমিন পড়ার জন্য)
+  qNorm          String // নরমালাইজড কী — exact-match হিটের জন্য
+  embedding      Json? // প্রশ্নের এমবেডিং — semantic মিলের জন্য (lexical-পথে না এলে null)
+  embeddingModel String    @default("") // যে এমবেডিং-মডেলে ভেক্টর বানানো (মিলের সময় মডেল মিলতে হয়)
+  answer         String
+  answerTag      String?
+  references     Json?
+  ragOnly        Boolean   @default(false) // যে অবস্থায় জমা (RAG লক চালু ছিল কি না)
+  hits           Int       @default(0)
+  createdAt      DateTime  @default(now())
+  lastHitAt      DateTime?
+  @@index([qNorm])
+  @@index([embeddingModel, createdAt])
+}
+
 model Question {
   id           String   @id @default(cuid())
   userId       String

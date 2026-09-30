@@ -11,6 +11,7 @@ import {
   MessageSquare,
   RefreshCw,
   Users,
+  Zap,
   type LucideIcon,
 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -59,6 +60,16 @@ export function StatsTab() {
           icon: KeyRound,
           value: `${toBn(stats.activeKeys)}/${toBn(stats.totalKeys)}`,
         },
+        {
+          label: '⚡ ক্যাশে উত্তর',
+          icon: Zap,
+          value: toBn(stats.cachedAnswers),
+        },
+        {
+          label: '⚡ ক্যাশ-হিট (সাশ্রয়)',
+          icon: Zap,
+          value: toBn(stats.cacheHits),
+        },
       ]
     : []
 
@@ -97,7 +108,7 @@ export function StatsTab() {
 
       {stats === null && !error ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {[0, 1, 2, 3, 4, 5].map((i) => (
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
             <Skeleton key={i} className="h-28 w-full rounded-2xl bg-emerald-50" />
           ))}
         </div>

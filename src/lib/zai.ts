@@ -1,4 +1,5 @@
 import ZAI from 'z-ai-web-dev-sdk'
+import type { ChatImage } from '@/lib/gemini'
 
 /**
  * z-ai ইঞ্জিন (ফলব্যাক):
@@ -22,6 +23,8 @@ let instance: ZAIInstance | null = null
 
 const ENV_API_KEY = process.env.ZAI_API_KEY?.trim() || ''
 const ENV_MODEL = process.env.ZAI_MODEL?.trim() || 'glm-4.7-flash'
+/** ভিশন-মডেল — ছবি-প্রশ্ন (sandbox SDK createVision পথ) এই মডেলে যায় */
+const ZAI_VISION_MODEL = process.env.ZAI_VISION_MODEL?.trim() || 'glm-4.5v'
 
 /** Z.ai-এর ডিফল্ট ফ্রি মডেল — মডেল রেজিস্ট্রি খালি হলে এটাই fallback */
 export function zaiDefaultModel(): string {
@@ -82,16 +85,27 @@ interface OpenAiLikeResponse {
 
 // ১) একটি নির্দিষ্ট key দিয়ে Z.ai পাবলিক প্ল্যাটফর্ম কল — OpenAI-compatible এন্ডপয়েন্ট
 //    (key-pool থেকে key এসে ডাকা হয়; semaphore + 429-retry ভিতরেই)
+//    image থাকলে OpenAI-ভিশন content অ্যারে (data URL) — টেক্সট ও ছবি একই request pipeline
 export async function zaiChatWithKey(
   apiKey: string,
   system: string,
   prompt: string,
-  model?: string
+  model?: string,
+  image?: ChatImage
 ): Promise<string> {
-  return withSlot(() => zaiCall(apiKey, system, prompt, model))
+  return withSlot(() => zaiCall(apiKey, system, prompt, model, image))
 }
 
-async function zaiHttp(apiKey: string, system: string, prompt: string, model?: string): Promise<string> {
+/** ইউজার-মেসেজ content — ছবি থাকলে OpenAI-ভিশন অ্যারে, নইলে সাদামাটা স্ট্রিং */
+function userContent(prompt: string, image?: ChatImage): string | Array<Record<string, unknown>> {
+  if (!image) return prompt
+  return [
+    { type: 'text', text: prompt },
+    { type: 'image_url', image_url: { url: `data:${image.mimeType};base64,${image.data}` } },
+  ]
+}
+
+async function zaiHttp(apiKey: string, system: string, prompt: string, model?: string, image?: ChatImage): Promise<string> {
   const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -102,7 +116,7 @@ async function zaiHttp(apiKey: string, system: string, prompt: string, model?: s
       model: model || ENV_MODEL,
       messages: [
         { role: 'assistant', content: system },
-        { role: 'user', content: prompt },
+        { role: 'user', content: userContent(prompt, image) },
       ],
       thinking: { type: 'disabled' },
     }),
@@ -122,12 +136,12 @@ async function zaiHttp(apiKey: string, system: string, prompt: string, model?: s
   return text
 }
 
-async function zaiCall(apiKey: string, system: string, prompt: string, model?: string): Promise<string> {
+async function zaiCall(apiKey: string, system: string, prompt: string, model?: string, image?: ChatImage): Promise<string> {
   const RETRIES = 3
   const BACKOFFS = [1500, 3000, 5000] // 429 (1302/1305) হলে অপেক্ষা + jitter — লাইনে দাঁড়িয়ে আবার
   for (let attempt = 0; ; attempt++) {
     try {
-      return await zaiHttp(apiKey, system, prompt, model)
+      return await zaiHttp(apiKey, system, prompt, model, image)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       const isRateLimit = msg.startsWith('ZAI_ENV_HTTP_429')
@@ -144,19 +158,41 @@ async function getZai(): Promise<ZAIInstance> {
   return instance
 }
 
-export async function zaiChat(system: string, prompt: string, model?: string): Promise<string> {
+export async function zaiChat(system: string, prompt: string, model?: string, image?: ChatImage): Promise<string> {
   // DB key-pool-এ Z.ai key থাকলে সেগুলোই আগে (withKeyFailover রাউন্ড-রবিন)
   const { getActiveKeys, withKeyFailover } = await import('@/lib/keypool')
   const keys = await getActiveKeys('zai')
   if (keys.length > 0) {
-    return withKeyFailover('zai', (key) => zaiCall(key, system, prompt, model))
+    return withKeyFailover('zai', (key) => zaiCall(key, system, prompt, model, image))
   }
   if (envConfigured) {
     // Env key (Vercel/সেলফ-হোস্ট)
-    return withSlot(() => zaiCall(ENV_API_KEY, system, prompt, model))
+    return withSlot(() => zaiCall(ENV_API_KEY, system, prompt, model, image))
   }
-  // শেষ ভরসা: স্যান্ডবক্স SDK credential (.z-ai-config ফাইল)
+  // শেষ ভরসা: স্যান্ডবক্স SDK credential (.z-ai-config ফাইল) — ছবি থাকলে createVision
   const zai = await getZai()
+  if (image) {
+    // SDK-র Vision টাইপ — VisionMultimodalContentItem[] content
+    const completion = await zai.chat.completions.createVision({
+      model: ZAI_VISION_MODEL,
+      messages: [
+        { role: 'system', content: system },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            {
+              type: 'image_url',
+              image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+            },
+          ],
+        },
+      ],
+    })
+    const text = completion.choices[0]?.message?.content ?? ''
+    if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')
+    return text
+  }
   const completion = await zai.chat.completions.create({
     messages: [
       { role: 'assistant', content: system },

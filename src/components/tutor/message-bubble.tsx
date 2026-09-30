@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkMath from 'remark-math'
@@ -19,10 +19,99 @@ export interface MessageBubbleData {
   references?: BookReference[]
   /** উত্তরের স্বাক্ষর — ইঞ্জিনের পুল থেকে র‍্যান্ডম নাম/কোড */
   answerTag?: string
+  /** ⚡ ক্যাশ-হিট — রিপিট প্রশ্ন, ইঞ্জিন-কল হয়নি */
+  cached?: boolean
+  /** 📸 ইউজারের পাঠানো ছবি (data URL — শুধু লাইভ বার্তায়, হিস্ট্রিতে সেভ হয় না) */
+  image?: string
 }
 
 export interface MessageBubbleProps {
   message: MessageBubbleData
+}
+
+/** React-children থেকে শুধু টেক্সট টেনে আনা (কোড-ব্লকের ভেতরের raw কোড) */
+function extractText(node: unknown): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (React.isValidElement(node)) {
+    return extractText((node.props as { children?: unknown }).children)
+  }
+  return ''
+}
+
+/** মডেল-তৈরি SVG-এর সেনিটাইজেশন — স্ক্রিপ্ট/ইভেন্ট-হ্যান্ডলার/এক্সটার্নাল-ছবি সরাও */
+function sanitizeSvg(code: string): string {
+  return code
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, '')
+    .replace(/<image[^>]*>/gi, '')
+    .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
+    .replace(/javascript:/gi, '')
+}
+
+/** 🎨 SVG ছবি — একই chat request-এ LLM নিজেই আঁকল; শূন্য অতিরিক্ত খরচ */
+function SvgBlock({ code }: { code: string }) {
+  const html = useMemo(() => sanitizeSvg(code), [code])
+  return (
+    <div className="my-2 overflow-x-auto rounded-xl border border-stone-200 bg-white p-2">
+      <div
+        className="min-w-[220px] [&>svg]:h-auto [&>svg]:max-w-full"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </div>
+  )
+}
+
+/** 🎨 Mermaid ডায়াগ্রাম — ক্লায়েন্ট-লাইব্রেরি রেন্ডার করে (dymanic import — বান্ডল ভারী হয় না) */
+function MermaidBlock({ code }: { code: string }) {
+  const [svg, setSvg] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { default: mermaid } = await import('mermaid')
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          theme: 'neutral',
+          fontFamily: 'inherit',
+        })
+        const id = `mmd-${Math.random().toString(36).slice(2)}`
+        const { svg: rendered } = await mermaid.render(id, code)
+        if (alive) setSvg(rendered)
+      } catch {
+        if (alive) setFailed(true)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [code])
+
+  if (failed) {
+    return (
+      <pre className="my-2 overflow-x-auto rounded-lg bg-stone-900 p-3 text-sm text-stone-100">
+        <code>{code}</code>
+      </pre>
+    )
+  }
+  if (!svg) {
+    return (
+      <div className="my-2 rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2 text-xs text-emerald-700">
+        ছবি এঁকে হচ্ছে…
+      </div>
+    )
+  }
+  return (
+    <div
+      className="my-2 overflow-x-auto rounded-xl border border-stone-200 bg-white p-3 [&>svg]:h-auto [&>svg]:max-w-full"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  )
 }
 
 /** মার্কডাউন → স্টাইলড এলিমেন্ট (KaTeX-সহ)। মডিউল লেভেলে একবারই তৈরি। */
@@ -48,11 +137,22 @@ const markdownComponents: Components = {
       </code>
     )
   },
-  pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded-lg bg-stone-900 p-3 text-sm text-stone-100">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => {
+    // 🎨 ডায়াগ্রাম-কোড ব্লক (```svg / ```mermaid) → আসল ছবি রেন্ডার — কোড-বাক্স নয়
+    const child = Array.isArray(children) ? children[0] : children
+    if (React.isValidElement(child)) {
+      const cls = (child.props as { className?: unknown }).className
+      const lang = typeof cls === 'string' ? cls : ''
+      const raw = extractText((child.props as { children?: unknown }).children)
+      if (lang.includes('language-svg') && raw.trim()) return <SvgBlock code={raw} />
+      if (lang.includes('language-mermaid') && raw.trim()) return <MermaidBlock code={raw} />
+    }
+    return (
+      <pre className="my-2 overflow-x-auto rounded-lg bg-stone-900 p-3 text-sm text-stone-100">
+        {children}
+      </pre>
+    )
+  },
   h1: ({ children }) => <h1 className="mb-1 mt-3 text-lg font-semibold">{children}</h1>,
   h2: ({ children }) => <h2 className="mb-1 mt-3 text-lg font-semibold">{children}</h2>,
   h3: ({ children }) => <h3 className="mb-1 mt-3 text-base font-semibold">{children}</h3>,
@@ -166,8 +266,19 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   if (message.role === 'user') {
     return (
       <motion.div {...fade} className="flex w-full justify-end">
-        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-emerald-600 px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
-          {message.text}
+        <div className="max-w-[85%]">
+          {message.image && (
+            <img
+              src={message.image}
+              alt="শিক্ষার্থীর পাঠানো ছবি"
+              className="mb-1.5 ml-auto max-h-56 rounded-2xl rounded-br-sm border border-emerald-200 object-cover shadow-sm"
+            />
+          )}
+          {message.text.trim() !== '' && (
+            <div className="whitespace-pre-wrap rounded-2xl rounded-br-sm bg-emerald-600 px-4 py-2.5 text-[15px] leading-relaxed text-white shadow-sm">
+              {message.text}
+            </div>
+          )}
         </div>
       </motion.div>
     )
@@ -234,6 +345,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           >
             {speaking ? <Square className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
           </Button>
+          {/* ⚡ ক্যাশ-হিট — রিপিট প্রশ্ন: তাৎক্ষণিক + ইঞ্জিন-খরচ শূন্য */}
+          {message.cached && (
+            <span
+              title="ক্যাশ থেকে তাৎক্ষণিক উত্তর — আজকের কোটা বাঁচলো!"
+              className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700"
+            >
+              ⚡ ক্যাশ — তাৎক্ষণিক
+            </span>
+          )}
           {/* স্বাক্ষর — অ্যাডমিন পুল থেকে র‍্যান্ডম নাম/কোড; স্টুডেন্টের কাছে রহস্যময় সাইন, অ্যাডমিন বুঝবে কোন ইঞ্জিন */}
           {message.answerTag && (
             <span

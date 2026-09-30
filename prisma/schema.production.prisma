@@ -111,6 +111,25 @@ model Chunk {
   @@index([embedded])
 }
 
+// ⚡ উত্তর-ক্যাশ — রিপিট প্রশ্নে ইঞ্জিন-কল ছাড়াই উত্তর (API খরচ শূন্য)
+// মিল: হুবহু-নরমালাইজড প্রশ্ন (qNorm) অথবা এমবেডিং cosine সাদৃশ্য ≥ ০.৯৫
+model AnswerCache {
+  id             String    @id @default(cuid())
+  question       String    @db.Text
+  qNorm          String    @db.Text
+  embedding      Json?
+  embeddingModel String    @default("")
+  answer         String    @db.Text
+  answerTag      String?
+  references     Json?
+  ragOnly        Boolean   @default(false)
+  hits           Int       @default(0)
+  createdAt      DateTime  @default(now())
+  lastHitAt      DateTime?
+  @@index([qNorm])
+  @@index([embeddingModel, createdAt])
+}
+
 model Question {
   id           String   @id @default(cuid())
   userId       String

@@ -9,7 +9,7 @@ import {
   asGeminiError,
   nextEngineWakeMs,
 } from '@/lib/keypool'
-import { generateContent, type GeneratedAnswer } from '@/lib/gemini'
+import { generateContent, type GeneratedAnswer, type ChatImage } from '@/lib/gemini'
 import { zaiChat, zaiChatWithKey, tuneZaiCapacity, zaiDefaultModel, zaiEnvConfigured } from '@/lib/zai'
 import { getActiveModelIds } from '@/lib/models'
 import { DEFAULT_SETTINGS, type AppSettings } from '@/lib/settings'
@@ -37,7 +37,8 @@ async function attemptWithModels(
   prompt: string,
   system: string,
   settings: AppSettings,
-  forceModelId?: string
+  forceModelId?: string,
+  image?: ChatImage
 ): Promise<AttemptResult> {
   const fallback =
     engine === 'gemini'
@@ -55,14 +56,14 @@ async function attemptWithModels(
       if (engine === 'gemini') {
         const keys = await getActiveKeys('gemini')
         if (keys.length === 0) throw new GeminiError(503, 'NO_KEYS')
-        const r = await generateContent(prompt, system, model)
+        const r = await generateContent(prompt, system, model, image)
         return { ...r, modelId: model }
       }
       const keys = await getActiveKeys('zai')
       if (keys.length === 0) break // Z.ai কী নেই → নিচে sandbox/env পথ
       // key যত আছে তত slot খুলে দাও — key যোগ করলেই সাথে সাথে ক্ষমতা বাড়ে
       tuneZaiCapacity(keys.length)
-      const text = await withKeyFailover('zai', (key) => zaiChatWithKey(key, system, prompt, model))
+      const text = await withKeyFailover('zai', (key) => zaiChatWithKey(key, system, prompt, model, image))
       return { text, blocked: false, modelId: model }
     } catch (e) {
       lastErr = e
@@ -75,7 +76,7 @@ async function attemptWithModels(
   // এখানে এলে দাঁড়ায় শুধু Z.ai: রেজিস্ট্রি খালি বা সব মডেল skip — DB পুল খালি মানে
   // env key (ZAI_API_KEY) বা sandbox credential — zaiChat ভিতরেই সামলায়
   // (sandbox SDK পথে মডেল প্যারাম কার্যকর না — তখন অডিটে মডেল null রাখাই সঠিক)
-  const text = await zaiChat(system, prompt, forceModelId)
+  const text = await zaiChat(system, prompt, forceModelId, image)
   return { text, blocked: false, modelId: forceModelId && zaiEnvConfigured() ? forceModelId : null }
 }
 
@@ -93,7 +94,8 @@ async function runPass(
   prompt: string,
   system: string,
   settings: AppSettings,
-  force?: ForceModel
+  force?: ForceModel,
+  image?: ChatImage
 ): Promise<PassOutcome> {
   let blocked: EngineResult | null = null
   let err: unknown = null
@@ -109,7 +111,8 @@ async function runPass(
         prompt,
         system,
         settings,
-        force && force.engine === engine ? force.modelId : undefined
+        force && force.engine === engine ? force.modelId : undefined,
+        image
       )
       if (!r.blocked && r.text.trim()) return { result: { ...r, engine }, blocked, err, noKeys }
       // সেফটি-ব্লক/খালি উত্তর — পরের ইঞ্জিন দেখো
@@ -130,7 +133,8 @@ export async function generateTutorAnswer(
   prompt: string,
   system: string,
   settings: AppSettings,
-  force?: ForceModel
+  force?: ForceModel,
+  image?: ChatImage
 ): Promise<EngineResult> {
   const primary: EngineId = settings.primaryEngine === 'zai' ? 'zai' : 'gemini'
   const secondary: EngineId = primary === 'gemini' ? 'zai' : 'gemini'
@@ -153,7 +157,7 @@ export async function generateTutorAnswer(
   }
 
   // পাস ১
-  let outcome = await runPass(order, prompt, system, settings, force)
+  let outcome = await runPass(order, prompt, system, settings, force, image)
 
   // কোনো ইঞ্জিন "কী নেই" বলেছে আর ফলাফলও নেই → এটা সেটআপ-সমস্যা, ট্রানজিয়েন্ট নয়।
   // সাথে সাথে NO_KEYS ছুঁড়ে দাও — নইলে অন্য ইঞ্জিনের জেনেরিক এররকে "ব্যস্ত" ভেবে
@@ -177,7 +181,7 @@ export async function generateTutorAnswer(
     const wake = nextEngineWakeMs()
     const wait = Math.max(WAITS[pass] + Math.floor(Math.random() * 500), Math.min(wake, 25_000))
     await new Promise((r) => setTimeout(r, wait))
-    outcome = await runPass(order, prompt, system, settings, force)
+    outcome = await runPass(order, prompt, system, settings, force, image)
     pass++
   }
 

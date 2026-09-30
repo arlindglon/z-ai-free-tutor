@@ -3,8 +3,9 @@ import { db } from '@/lib/db'
 import { getSessionUser, safeUser, unauthorized } from '@/lib/session'
 import { getSettings } from '@/lib/settings'
 import { consumeCredit, getUsedToday, refundCredit } from '@/lib/credits'
-import { embedQuery, buildSystemPrompt } from '@/lib/gemini'
+import { embedQuery, buildSystemPrompt, type ChatImage } from '@/lib/gemini'
 import { generateTutorAnswer } from '@/lib/ai-engine'
+import { findCachedAnswer, recordCacheHit, saveToCache, type CachedAnswer } from '@/lib/answer-cache'
 import { pickModelAlias, resolveAliasTarget } from '@/lib/models'
 import {
   retrieveTopK,
@@ -19,9 +20,20 @@ import { GeminiError, isTransientAiError } from '@/lib/keypool'
 
 /**
  * মূল ডাটা-ফ্লো:
- * [প্রশ্ন] → [ক্রেডিট চেক] → [এমবেডিং বা লেক্সিকাল] → [TiDB RAG: সেরা ৩ রেফারেন্স]
+ * [প্রশ্ন/ছবি] → [ক্রেডিট চেক] → [⚡ ক্যাশ-হিট? হলে খরচ-শূন্য তাৎক্ষণিক উত্তর]
+ * → [এমবেডিং বা লেক্সিকাল] → [TiDB RAG: সেরা ৩ রেফারেন্স]
  * → [কী-পুল: জেমিনাই, ফেইল হলে z-ai] → [ধাপে ধাপে বাংলা উত্তর] → [রেফারেন্স + ক্রেডিট]
  */
+
+/** ক্লায়েন্ট-সাইড কম্প্রেস করা ছবি (data URL) → { mimeType, base64 } — না-মিললে null */
+function parseImage(value: unknown): ChatImage | null {
+  if (typeof value !== 'string') return null
+  const m = value.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/)
+  if (!m || !m[2] || m[2].length < 100) return null
+  // Vercel-বডি লিমিট আগেই আটকায়; তবু সেনিটি-ক্যাপ: ~5MB base64
+  if (m[2].length > 5_500_000) return null
+  return { mimeType: m[1] === 'image/jpg' ? 'image/jpeg' : m[1], data: m[2] }
+}
 export async function POST(req: NextRequest) {
   const user = await getSessionUser()
   if (!user) return unauthorized()
@@ -29,8 +41,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const question = String(body.question ?? '').trim()
   const subject = body.subject ? String(body.subject).trim() : null
+  const image = parseImage(body.image)
 
-  if (!question) {
+  if (!question && !image) {
     return NextResponse.json({ error: 'আগে প্রশ্নটা লেখো! 😊' }, { status: 400 })
   }
   if (question.length > 2000) {
@@ -59,11 +72,48 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // ⚡ ক্যাশ-হিট-এ ক্রেডিট ফেরত + তাৎক্ষণিক উত্তর — রিপিট প্রশ্নে ইঞ্জিন-কলই হয় না
+    const serveFromCache = async (cached: CachedAnswer) => {
+      await recordCacheHit(cached.id)
+      if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
+      const row = await db.question.create({
+        data: {
+          userId: user.id,
+          question,
+          answer: cached.answer,
+          answerTag: cached.answerTag,
+          references: cached.references,
+          answerEngine: 'cache', // অডিট: এই উত্তর ইঞ্জিন না, ক্যাশ থেকে এসেছে
+        },
+      })
+      return NextResponse.json({
+        id: row.id,
+        answer: cached.answer,
+        answerTag: cached.answerTag,
+        references: cached.references,
+        cached: true,
+        credits: {
+          used: user.role === 'admin' ? used : Math.max(0, used - 1),
+          limit: user.role === 'admin' ? 0 : settings.dailyCredits,
+        },
+        user: safeUser(user),
+      })
+    }
+
+    // ⚡ স্তর ১: হুবহু-মিল ক্যাশ — এমবেডিং-কলও বাঁচে (ছবি-প্রশ্ন ক্যাশে যায় না)
+    if (!image) {
+      const exact = await findCachedAnswer(question, null, settings.embeddingModel, settings.ragOnlyMode).catch(
+        () => null
+      )
+      if (exact) return await serveFromCache(exact)
+    }
+
     // ২+৩) রিট্রিভাল: ভেক্টর (Gemini) চললে ভেক্টর, না চললে TF-IDF লেক্সিকাল —
     // রিট্রিভাল কখনোই উত্তর আটকাবে না
+    let queryVec: number[] | null = null
     let refs: Awaited<ReturnType<typeof retrieveTopK>> = []
     try {
-      const queryVec = await embedQuery(question, settings.embeddingModel)
+      queryVec = await embedQuery(question, settings.embeddingModel)
       refs = await retrieveTopK(queryVec, subject, 3)
     } catch (retrievalErr) {
       console.error(
@@ -73,10 +123,19 @@ export async function POST(req: NextRequest) {
       refs = await retrieveTopKLexical(question, subject, 3)
     }
 
+    // ⚡ স্তর ২: এমবেডিং-সাদৃশ্য ক্যাশ (cosine ≥ ০.৯৫) — ছোট-বড় ভুল-বানান/শব্দ-ক্রমেও হিট
+    if (!image && queryVec) {
+      const similar = await findCachedAnswer(question, queryVec, settings.embeddingModel, settings.ragOnlyMode).catch(
+        () => null
+      )
+      if (similar) return await serveFromCache(similar)
+    }
+
     // 🔒 RAG লক — গেট ১ (ডিটারমিনিস্টিক): বইয়ের কোনো অংশ না মিললে প্রশ্ন মডেলের কাছেই যাবে না —
     // নইলে ফ্রি ফ্ল্যাশ মডেল নিজের মাথা থেকে উত্তর দিয়ে ফেলে (প্রম্পট-নিয়ম ignore করে)।
     // ক্রেডিট ফেরত + হিস্ট্রিতে স্বাভাবিক টিউটর-বার্তা হিসেবে সেভ — স্টুডেন্ট কোনো এরর দেখে না।
-    if (settings.ragOnlyMode && refs.length === 0) {
+    // 📸 ছবি-প্রশ্নে গেট-১ বাইপাস — ছবিটাই প্রধান রেফারেন্স (লক থাকলে ছবি-ফিচারটাই অচল হত)
+    if (settings.ragOnlyMode && refs.length === 0 && !image) {
       if (user.role !== 'admin') await refundCredit(user.id).catch(() => {})
       const row = await db.question.create({
         data: {
@@ -100,7 +159,8 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ৪) প্রম্পট তৈরি (বইয়ের কনটেক্সটসহ)
+    // ৪) প্রম্পট তৈরি (বইয়ের কনটেক্সটসহ + ছবি-নির্দেশনা)
+    const qText = question || 'ছবিতে দেওয়া প্রশ্নটির উত্তর দাও'
     const context = refs.length
       ? refs
           .map(
@@ -109,19 +169,24 @@ export async function POST(req: NextRequest) {
           )
           .join('\n\n')
       : ''
-    const prompt = context
-      ? `=== পাঠ্যবইয়ের রেফারেন্স (সবচেয়ে প্রাসঙ্গিক অংশগুলো) ===\n${context}\n\n=== শিক্ষার্থীর প্রশ্ন ===\n${question}`
-      : `=== শিক্ষার্থীর প্রশ্ন ===\n${question}`
+    let prompt = context
+      ? `=== পাঠ্যবইয়ের রেফারেন্স (সবচেয়ে প্রাসঙ্গিক অংশগুলো) ===\n${context}\n\n=== শিক্ষার্থীর প্রশ্ন ===\n${qText}`
+      : `=== শিক্ষার্থীর প্রশ্ন ===\n${qText}`
+    if (image) {
+      prompt += `\n\n=== শিক্ষার্থীর পাঠানো ছবি ===\nছবিটা মনোযোগ দিয়ে পড়ো — প্রশ্ন/অঙ্ক/চিত্র ছবিতেই আছে। ছবির লেখা পড়ে (বাংলা/ইংরেজি/অঙ্ক যা-ই হোক) প্রশ্নটা বুঝে, ধাপে ধাপে সমাধান/ব্যাখ্যা করো। ছবিটাই এখন প্রধান রেফারেন্স।`
+    }
 
     // ৫) কী-পুল থেকে জেমিনাই (429 অটো-ফেইলওভার), ফেইল হলে z-ai — স্টুডেন্ট সবসময় উত্তর পাবে
     // RAG লক চালু থাকলে সিস্টেম প্রম্পট শুধু বইয়ের রেফারেন্সে সীমাবদ্ধ থাকে
+    // 📸 ছবি-প্রশ্নে লক-প্রোটোকল বন্ধ — ছবিই ভিত্তি
     // স্বাক্ষর-রাউটিং: প্রশ্নে অ্যাডমিনের দেওয়া কোড/নাম থাকলে সেই মডেল সবার আগে চেষ্টা হয়
     const aliasTarget = await resolveAliasTarget(question)
     const result = await generateTutorAnswer(
       prompt,
-      buildSystemPrompt({ ragOnly: settings.ragOnlyMode }),
+      buildSystemPrompt({ ragOnly: settings.ragOnlyMode && !image }),
       settings,
-      aliasTarget ?? undefined
+      aliasTarget ?? undefined,
+      image ?? undefined
     )
 
     if (result.blocked || !result.text.trim()) {
@@ -138,7 +203,7 @@ export async function POST(req: NextRequest) {
     // কনটেন্ট-শব্দ আসলে refs-এ আছে কি না (লেক্সিক্যাল grounding)। মডেল ভুয়া উত্তরের শেষে
     // ফুটারও লাগিয়ে দিতে পারে — তাই শুধু ফুটার-চেক যথেষ্ট নয় (লাইভ টেস্টে প্রমাণিত)।
     // ফাঁস ধরা পড়লে বদলে নির্দিষ্ট প্রত্যাখ্যান দাও। ক্রেডিট ফেরত।
-    if (settings.ragOnlyMode && !answerGroundedInBook(result.text, refs)) {
+    if (settings.ragOnlyMode && !image && !answerGroundedInBook(result.text, refs)) {
       console.warn(
         `[chat] RAG-lock violation: কভারেজ ${(bookCoverage(result.text, refs) * 100).toFixed(0)}% (থ্রেশহোল্ড ৪৫%) — উত্তরে বইয়ের রেফারেন্স নেই → প্রত্যাখ্যান দেওয়া হলো। ফাঁস করা অংশ:`,
         result.text.slice(0, 300)
@@ -190,6 +255,19 @@ export async function POST(req: NextRequest) {
     // (আসল মডেল বুঝবে না), অ্যাডমিন নাম দেখে মডেল ধরতে পারবে। পুল খালি হলে স্বাক্ষর নেই।
     // আসল ইঞ্জিন/মডেল শুধু DB-তে অডিটের জন্য জমা হয় — রেসপনসে ফাঁস হয় না।
     const answerTag = await pickModelAlias(result.modelId)
+
+    // ⚡ সফল, প্রত্যাখ্যান-বিহীন টেক্সট-উত্তর ক্যাশে জমা — পরের রিপিট-প্রশ্ন = খরচ শূন্য
+    if (!image && !isCleanRefusal(result.text)) {
+      await saveToCache({
+        question,
+        answer: result.text,
+        answerTag,
+        references,
+        embedding: queryVec,
+        embeddingModel: settings.embeddingModel,
+        ragOnly: settings.ragOnlyMode,
+      })
+    }
 
     // ৭) হিস্ট্রিতে সেভ
     const row = await db.question.create({

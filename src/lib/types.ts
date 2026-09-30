@@ -30,6 +30,8 @@ export type ChatApiResponse = {
   answerTag?: string | null
   references: BookReference[]
   credits: Credits
+  /** ⚡ ক্যাশ-হিট — রিপিট প্রশ্ন, ইঞ্জিন-কল হয়নি (তাৎক্ষণিক + কোটা বাঁচলো) */
+  cached?: boolean
 }
 
 export type HistoryMessage = {
@@ -86,6 +88,9 @@ export type StatsInfo = {
   embeddedChunks: number
   activeKeys: number
   totalKeys: number
+  /** ⚡ উত্তর-ক্যাশ */
+  cachedAnswers: number
+  cacheHits: number
 }
 
 export type SettingsInfo = {

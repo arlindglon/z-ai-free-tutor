@@ -66,15 +66,23 @@ export async function embedQuery(text: string, model: string): Promise<number[]>
 
 export type GeneratedAnswer = { text: string; blocked: boolean }
 
-/** জেমিনাই দিয়ে উত্তর তৈরি (সিস্টেম ইনস্ট্রাকশনসহ) */
-export async function generateContent(prompt: string, system: string, model: string): Promise<GeneratedAnswer> {
+/** ছবি-প্রশ্নের জন্য ডিকোড করা ছবি — base64 payload (প্রিফিক্স ছাড়া) */
+export type ChatImage = { mimeType: string; data: string }
+
+/** জেমিনাই দিয়ে উত্তর তৈরি (সিস্টেম ইনস্ট্রাকশনসহ; ছবি থাকলে inline_data হিসেবে যায় —
+ *  টেক্সট-প্রশ্ন ও ছবি-প্রশ্ন একই request pipeline — request-গণনা একই) */
+export async function generateContent(prompt: string, system: string, model: string, image?: ChatImage): Promise<GeneratedAnswer> {
   return withKeyFailover('gemini', async (key) => {
+    const parts: Record<string, unknown>[] = [{ text: prompt }]
+    if (image) {
+      parts.push({ inline_data: { mime_type: image.mimeType, data: image.data } })
+    }
     const res = await fetch(`${BASE}/models/${model}:generateContent`, {
       method: 'POST',
       headers: authHeaders(key),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        contents: [{ role: 'user', parts }],
         generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
       }),
     })
@@ -135,6 +143,10 @@ export function buildSystemPrompt(opts?: { ragOnly?: boolean }): string {
 • যতটুকু দরকার ততটুকুই — বাড়তি বাক্য, একই কথার পুনরাবৃত্তি বা প্রশ্নের ভাষান্তর-মাত্র উত্তর নয়।
 
 ৪. সমীকরণ, ভগ্নাংশ, সূত্র — সব LaTeX দিয়ে লিখবে: ইনলাইনে $...$ এবং আলাদা লাইনে $$...$$। যেমন: $\\frac{a}{b}$, $E = mc^2$, $\\sqrt{x}$
+৪.৫. ছবি/চিত্র দরকার হলে AI-ছবি বানানো নয় — নিজেই কোড লিখে আঁকবে; শিক্ষার্থীর স্ক্রিনে ছবিটা সরাসরি রেন্ডার হবে:
+• গঠন-চিত্র (কোষ, ফুল, হৃৎপিণ্ড), রশ্মিপথ, গ্রাফ, লেবেল-সহ চিত্র → svg মার্কার-সহ কোড-ব্লক (তিনটি ব্যাকটিকের পরে svg লিখবে: \`\`\`svg)। নিয়ম: viewBox="0 0 640 400" ধাঁচের স্থির viewBox, বাংলা লেবেল <text>-এ (font-size ১৪–১৮, পড়ার মতো বড়), পরিষ্কার রঙ, লাইন/তীর দিয়ে লেবেল-নির্দেশ। <script>, <image>, <foreignObject> কখনো নয়।
+• প্রক্রিয়া/ফ্লোচার্ট/চক্র (জলচক্র, রক্ত সঞ্চালন, খাদ্যশৃঙ্খল) → mermaid কোড-ব্লক (তিনটি ব্যাকটিকের পরে mermaid লিখবে: \`\`\`mermaid; flowchart TD বা LR; বাংলা লেবেল চলে)।
+• কোড-ব্লকের আগে-পরে স্বাভাবিক গদ্য-ব্যাখ্যাও থাকবে — শুধু কোড দিয়ে উত্তর শেষ করবে না। যেখানে ছবি সত্যিই দরকার নেই সেখানে জোর-করে আঁকবে না।
 ৫. ${rule5}
 ৬. "পাঠ্যবইয়ের রেফারেন্স" অংশে বই থেকে তোলা অংশ দেওয়া থাকলে সেই তথ্যের সর্বোচ্চ প্রাধান্য; উত্তরের একেবারে শেষে "📖 বইয়ের রেফারেন্স:" লিখে বইয়ের নাম, অধ্যায় ও পৃষ্ঠা নম্বর বাংলা সংখ্যায় (১, ২, ৩…) উল্লেখ করবে।
 ৭. মাঝে মাঝে — সব উত্তরে নয় — শেষে স্বাভাবিক ভঙ্গিতে একটা ছোট চিন্তা-করার প্রশ্ন ছুড়ে দিতে পারো (যেমন: "আচ্ছা, বলতে পারো সব মাটিতে কি সব ধরনের ফসল ভালো জন্মায়?") — শুধু যেখানে সত্যিই ভাবার জায়গা আছে সেখানেই।
