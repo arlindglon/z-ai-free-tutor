@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  FileText,
   Loader2,
   Pencil,
   Plus,
@@ -82,6 +83,11 @@ export function BooksTab() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+
+  // ---------- Google Docs লিংক থেকে টেক্সট আনা ----------
+  const [gdocUrl, setGdocUrl] = useState('')
+  const [gdocBusy, setGdocBusy] = useState(false)
+  const [gdocMsg, setGdocMsg] = useState<string | null>(null)
 
   // ---------- ধাপ ১: OCR প্রম্পট কপি ----------
   const [promptCopied, setPromptCopied] = useState(false)
@@ -330,6 +336,40 @@ export function BooksTab() {
     )
   }
 
+  // ---------- Google Docs লিংক থেকে ডকের টেক্সট এনে textarea-তে ভরা ----------
+  async function handleGdocFetch() {
+    if (gdocBusy) return
+    const url = gdocUrl.trim()
+    if (!url) {
+      setGdocMsg('আগে Google Docs-এর লিংকটা দাও।')
+      return
+    }
+    setGdocBusy(true)
+    setGdocMsg(null)
+    setFormError(null)
+    try {
+      const data = await api<{ text: string; title: string | null }>('/api/admin/books/gdoc', {
+        method: 'POST',
+        body: { url },
+      })
+      const fetchedTitle = data.title
+      setText((prev) => (prev.trim() ? `${prev.trimEnd()}\n\n${data.text}` : data.text))
+      if (fetchedTitle) {
+        setTitle((prev) => prev.trim() || fetchedTitle)
+      }
+      setGdocUrl('')
+      setGdocMsg(
+        `✓ ডক থেকে ${toBn(data.text.length)} অক্ষরের লেখা এসে নিচের বক্সে ভরে গেছে${
+          fetchedTitle && !title.trim() ? ` — বইয়ের নাম "${fetchedTitle}" বসানো হলো` : ''
+        }। এবার নিচের প্রিভিউ দেখে বই যোগ করো।`
+      )
+    } catch (e) {
+      setGdocMsg(e instanceof ApiError ? e.message : 'ডক আনা গেল না, আবার চেষ্টা করো।')
+    } finally {
+      setGdocBusy(false)
+    }
+  }
+
   // ---------- টেক্সট থেকে বই সেভ ----------
   async function handleSave() {
     if (saving) return
@@ -539,9 +579,65 @@ export function BooksTab() {
             <h3 className="font-semibold text-stone-900">ধাপ ২ — টেক্সট পেস্ট করে বই যোগ করো</h3>
             <p className="mt-1 text-xs text-stone-500">
               &quot;### পৃষ্ঠা N&quot; মার্কার থাকলে পৃষ্ঠা ও অধ্যায় নিজে থেকেই ভাগ হবে — রেফারেন্সে
-              প্রকৃত পৃষ্ঠা নম্বর দেখা যাবে। বই বড় হলে প্রথমে <b>নতুন বই</b> বানাও, তারপর প্রতি
-              ব্যাচ <b>আগের বইয়ে যোগ</b> দিয়ে পেস্ট করো।
+              প্রকৃত পৃষ্ঠা নম্বর দেখা যাবে। PDF থেকে সরাসরি কপি করা লেখা (জমানো "পৃষ্ঠা N",
+              "PDF+ 4", "ফর্মা-১..." আবর্জনাসহ) পেস্ট দিলেও সব নিজে থেকেই পরিষ্কার হয়ে যায়। বই বড়
+              হলে প্রথমে <b>নতুন বই</b> বানাও, তারপর প্রতি ব্যাচ <b>আগের বইয়ে যোগ</b> দিয়ে পেস্ট করো।
             </p>
+          </div>
+
+          {/* ---------- Google Docs লিংক থেকে টেক্সট আনা ---------- */}
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+            <div className="flex items-start gap-2">
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-stone-800">
+                  Google Docs লিংক থেকে বই আনো (নতুন!)
+                </p>
+                <p className="mt-0.5 text-xs text-stone-500">
+                  বইটা Google Docs-এ টাইপ/পেস্ট করে রাখো, শেয়ারিং করো{' '}
+                  <b>&quot;লিংক জানা যে কেউ — Viewer&quot;</b>, তারপর লিংকটা এখানে দাও — পুরো লেখা নিচের
+                  বক্সে চলে আসবে। PDF লিংক চলবে না, ডকুমেন্ট লিংক দরকার।
+                </p>
+              </div>
+            </div>
+            <div className="mt-2.5 flex flex-col gap-2 sm:flex-row">
+              <Input
+                value={gdocUrl}
+                onChange={(e) => setGdocUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void handleGdocFetch()
+                  }
+                }}
+                placeholder="https://docs.google.com/document/d/.../edit?usp=sharing"
+                aria-label="Google Docs লিংক"
+                className="h-11 border-stone-200 bg-white focus-visible:ring-emerald-300"
+              />
+              <Button
+                type="button"
+                onClick={() => void handleGdocFetch()}
+                disabled={gdocBusy}
+                className="h-11 shrink-0 bg-emerald-600 px-4 text-white shadow-sm hover:bg-emerald-700"
+              >
+                {gdocBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="h-4 w-4" />
+                )}
+                {gdocBusy ? 'আনা হচ্ছে...' : 'লিংক থেকে আনো'}
+              </Button>
+            </div>
+            {gdocMsg && (
+              <p
+                className={`mt-2 text-xs ${
+                  gdocMsg.startsWith('✓') ? 'text-emerald-700' : 'text-rose-700'
+                }`}
+                role="status"
+              >
+                {gdocMsg}
+              </p>
+            )}
           </div>
 
           {/* মোড টগল: নতুন বই বনাম আগের বইয়ে পৃষ্ঠা যোগ */}

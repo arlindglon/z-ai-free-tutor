@@ -13,11 +13,77 @@
 
 const BN_DIGITS = '০১২৩৪৫৬৭৮৯'
 
+/** বাংলা নুক্তা-রূপভেদ নরমালাইজ (ড়/ঢ়/য় এক-কোডপয়েন্ট বনাম জোড়া-রূপ — দুই রূপকেই এক করে) */
+function bnNfd(s: string): string {
+  return s.replace(/[\u09DC\u09DD\u09DF]/g, (c) => NUFTA_MAP_BN[c])
+}
+
+/** ocr-book নিজের কপি — bn.ts আমদানি এড়াতে (ক্লায়েন্ট-বান্ডল হালকা রাখতে) */
+const NUFTA_MAP_BN: Record<string, string> = {
+  '\u09DC': '\u09A1\u09BC', // ড়
+  '\u09DD': '\u09A2\u09BC', // ঢ়
+  '\u09DF': '\u09AF\u09BC', // য়
+}
+
 /** বাংলা/ইংরেজি সংখ্যা-স্ট্রিং → সংখ্যা (যেমন "২৩" → 23) */
 export function bnToNumber(s: string): number | null {
-  const norm = s.trim().replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)))
+  const norm = s
+    .trim()
+    .replace(/\uFEFF/g, '')
+    .replace(/[০-৯]/g, (d) => String(BN_DIGITS.indexOf(d)))
   if (!/^\d+$/.test(norm)) return null
   return parseInt(norm, 10)
+}
+
+/**
+ * বাংলা ক্রমবাচক শব্দ → সংখ্যা ("প্রথম অধ্যায়..." জাতীয় শিরোনাম থেকে)
+ */
+const BN_ORDINALS: Record<string, number> = {
+  'প্রথম': 1,
+  'দ্বিতীয়': 2,
+  'তৃতীয়': 3,
+  'চতুর্থ': 4,
+  'পঞ্চম': 5,
+  'ষষ্ঠ': 6,
+  'সপ্তম': 7,
+  'অষ্টম': 8,
+  'নবম': 9,
+  'দশম': 10,
+  'একাদশ': 11,
+  'দ্বাদশ': 12,
+  'ত্রয়োদশ': 13,
+  'চতুর্দশ': 14,
+  'পঞ্চদশ': 15,
+  'ষোড়শ': 16,
+  'সপ্তদশ': 17,
+  'অষ্টাদশ': 18,
+  'উনবিংশ': 19,
+  'বিংশ': 20,
+}
+
+function ordinalToNumber(word: string): number | null {
+  return BN_ORDINALS[word.trim()] ?? null
+}
+
+/**
+ * PDF-থেকে-কপি / Google-Docs-এ পেস্ট করা লেখার আবর্জনা বাদ:
+ *   • BOM (\uFEFF) — export ফাইলের শুরুতে লেগে আসে, নইলে প্রথম "পৃষ্ঠা ১" মার্কার ধরা পড়ে না
+ *   • একান্ত "PDF" / "PDF+ 1" / "PDF+ 12" লাইন — Google Drive/Docs-এর PDF-প্রিভিউ থেকে
+ *     কপি করলে ভাঙা-পৃষ্ঠা/ছবির জায়গায় এই মার্কারগুলোই চলে আসে (কোনো পাঠ্য নয়)
+ *   • "ফর্মা-১, কৃষিশিক্ষা-৯ম-১০ম শ্রেণি" জাতীয় ছাপা-ফুটার
+ * লাইনের ভেতরে জমানো "PDF+ 4" সাফ করা হয় না — শুধু আলাদা লাইনেরগুলো আবর্জনা বলে নিশ্চিত।
+ */
+const PDF_ARTIFACT_LINE_RE = /^[ \t]*pdf(?:[ \t]*\+[ \t]*[০-৯0-9]+)?[ \t]*$/i
+const PRINT_FORM_FOOTER_RE = /^[ \t]*ফর্মা[ \t]*[-–—:]?[ \t]*[০-৯0-9]*[ \t]*[,،:][ \t]*.*শ্রেণি[ \t]*$/
+
+export function stripCopyArtifacts(text: string): string {
+  return text
+    .replace(/\uFEFF/g, '')
+    .split('\n')
+    // লাইনের শেষে লেগে থাকা "PDF+ 4" জাতীয় মার্কারও সাফ — নিজে নতুন লাইন না নিলেও
+    .map((ln) => ln.replace(/[ \t]*pdf[ \t]*\+[ \t]*[০-৯0-9]+[ \t]*$/i, '').trimEnd())
+    .filter((ln) => !PDF_ARTIFACT_LINE_RE.test(ln) && !PRINT_FORM_FOOTER_RE.test(ln))
+    .join('\n')
 }
 
 /** "### পৃষ্ঠা ১" / "পৃষ্ঠা ২" / "**পৃষ্ঠা ৩**" / "### পৃষ্ঠা: 4" — পুরো লাইন শুধু মার্কার হতে হবে */
@@ -87,9 +153,14 @@ function stripRunningHeaders(body: string, titleHint: string): string {
   return out
 }
 
-/** অধ্যায়-কীওয়ার্ড দিয়ে শুরু হওয়া লাইন (শিরোনাম প্রার্থী) */
-const CHAPTER_KEYWORD_RE =
-  /^(?:#{1,6}[ \t]*)?\*{0,2}[ \t]*(অধ্যায়|অধায়|অধযায়|অনুচ্ছেদ|পাঠ|ইউনিট|chapter|unit|lesson)/i
+/** অধ্যায়-কীওয়ার্ড দিয়ে শুরু হওয়া লাইন (শিরোনাম প্রার্থী)
+ *  দুই রূপ ধরে: "অধ্যায় ৩ ..." ও "প্রথম অধ্যায় কৃষি প্রযুক্তি" (ক্রমবাচক-আগে-কীওয়ার্ড, NCTB বইয়ের মতো)
+ *  পরিচ্ছেদও অধ্যায়-স্তরেই যায় — আরও সূক্ষ্ম রেফারেন্স পাওয়া যায় */
+const ORDINAL_ALT = `(?:${Object.keys(BN_ORDINALS).join('|')})[ \\t]+`
+const CHAPTER_KEYWORD_RE = new RegExp(
+  `^(?:#{1,6}[ \\t]*)?\\*{0,2}[ \\t]*(${ORDINAL_ALT}?)?(অধ্যায়|অধায়|অধযায়|পরিচ্ছেদ|অনুচ্ছেদ|পাঠ|ইউনিট|chapter|unit|lesson)`,
+  'i'
+)
 
 /** "---" জাতীয় বিভাজক লাইন */
 const SEPARATOR_RE = /^[ \t]*(?:[-*_=]{3,}|═+|—{2,}|─{2,})[ \t]*$/
@@ -191,6 +262,9 @@ function normalizeTables(lines: string[]): string[] {
 export function cleanOcrText(raw: string): string {
   let t = raw.replace(/\r\n?/g, '\n')
 
+  // PDF-কপি আবর্জনা ("PDF+ 4", ফর্মা-ফুটার, BOM) — মার্কার-আগেই যায়, এখানে না-থাকলেও নিরাপদ
+  t = stripCopyArtifacts(t)
+
   // HTML: <br> → নিউলাইন (রো-জোড়ার পরে টেবিলের বাইরে ফাঁকা লাইন হয়ে যায়), এন্টিটি → অক্ষর
   t = t
     .replace(/<br\s*\/?>/gi, '\n')
@@ -265,9 +339,13 @@ function findChapterHeading(pageText: string): { title: string; number: number |
     const digitGroups = t.match(/[০-৯0-9]+/g) ?? []
     if (/[০-৯0-9]$/.test(t) && digitGroups.length >= 2) continue
 
-    // কীওয়ার্ডের পরের অংশ থেকে নম্বর + শিরোনাম
+    // কীওয়ার্ডের পরের অংশ থেকে নম্বর + শিরোনাম; সংখ্যা না থাকলে ক্রমবাচক শব্দ ("প্রথম অধ্যায়...")
     const mm = after.match(/^[ \t]*[:：\-–—]?[ \t]*([০-৯0-9]+)?[ \t]*[:：\-–—.]?[ \t]*(.*)$/)
-    const number = mm?.[1] ? bnToNumber(mm[1]) : null
+    const number = mm?.[1]
+      ? bnToNumber(mm[1])
+      : km[1]
+        ? ordinalToNumber(km[1])
+        : null
     const rest = (mm?.[2] ?? '').trim().replace(/\*+/g, '').trim()
     // বাক্যের মতো শেষ হলে বাদ ("অধ্যায় ১ এ আমরা শিখেছি।")
     if (rest && /[।!?]$/.test(rest)) continue
@@ -280,6 +358,51 @@ function findChapterHeading(pageText: string): { title: string; number: number |
   return null
 }
 
+/** "[চিত্র: ...]" জাতীয় ছবি-প্লেসহোল্ডার লাইন — হেডার নয়, বইয়ের অংশ হিসেবে থাকে */
+const CHITR_RE = /^[ \t]*\[চিত্র[:：]/
+
+/**
+ * প্রতি পৃষ্ঠার মাথায় বারবার ফেরত আসা রানিং-হেডার অটো শনাক্ত করে বাদ।
+ * titleHint-ভিত্তিক stripRunningHeaders শুধু বইয়ের নাম-মিল হেডার ধরে — কিন্তু NCTB বইয়ে
+ * দুই প্রকার হেডার থাকে (বইয়ের নাম + বিষয়ের নাম, যেমন "কৃষিশিক্ষা" ও "কৃষি প্রযুক্তি")।
+ * নিয়ম: কমপক্ষে ৩টি পৃষ্ঠার একেবারে প্রথম লাইনে হুবহু একই ছোট (≤৪০ অক্ষর),
+ * বাক্য-চিহ্ন ছাড়া লেখা ফিরে এলে সেটা হেডার — সব পৃষ্ঠার মাথা থেকে বাদ।
+ */
+function autoStripRepeatedPageHeads(pages: OcrPage[]): OcrPage[] {
+  const headOf = (p: OcrPage): string | null => {
+    for (const raw of p.text.split('\n')) {
+      const t = raw.trim()
+      if (!t) continue
+      return t
+    }
+    return null
+  }
+  const isHeaderish = (h: string): boolean =>
+    h.length <= 40 &&
+    !/[।!?]$/.test(h) &&
+    !PAGE_RE.test(h) &&
+    !SEPARATOR_RE.test(h) &&
+    !CHITR_RE.test(h)
+
+  const counts = new Map<string, number>()
+  for (const p of pages) {
+    const h = headOf(p)
+    if (!h || !isHeaderish(h)) continue
+    counts.set(h, (counts.get(h) ?? 0) + 1)
+  }
+  const heads = new Set([...counts.entries()].filter(([, n]) => n >= 3).map(([h]) => h))
+  if (heads.size === 0) return pages
+
+  return pages.map((p) => {
+    const h = headOf(p)
+    if (!h || !heads.has(h)) return p
+    const lines = p.text.split('\n')
+    const firstIdx = lines.findIndex((ln) => ln.trim() !== '')
+    lines.splice(firstIdx, 1)
+    return { ...p, text: lines.join('\n').trim() }
+  })
+}
+
 /**
  * OCR টেক্সট → পৃষ্ঠার তালিকা + অধ্যায়ের গ্রুপ।
  * মার্কার না থাকলে: একটাই অধ্যায় "সম্পূর্ণ বই" (pages খালি — সার্ভারে পুরো লেখা chunkContent হবে)।
@@ -287,8 +410,10 @@ function findChapterHeading(pageText: string): { title: string; number: number |
  * বইয়ের নাম মিললে বাদ দেওয়া হয়, আর লাইনের ভেতরে জমানো "পৃষ্ঠা N" মার্কারও খুলে পৃষ্ঠা-ভাগ হয়।
  */
 export function parseOcrBook(raw: string, opts?: { titleHint?: string | null }): OcrParseResult {
-  const titleHint = (opts?.titleHint ?? '').trim()
-  const text = unwrapInlinePageMarkers(raw.replace(/\r\n?/g, '\n').trim())
+  const titleHint = bnNfd((opts?.titleHint ?? '').trim())
+  const text = unwrapInlinePageMarkers(
+    stripCopyArtifacts(bnNfd(raw).replace(/\r\n?/g, '\n')).trim()
+  )
   const lines = text.split('\n')
 
   // ১) পৃষ্ঠা-মার্কার লাইন খোঁজো
@@ -337,6 +462,9 @@ export function parseOcrBook(raw: string, opts?: { titleHint?: string | null }):
     }
   }
 
+  // ২.৫) রিপিট-হেডার ("কৃষি প্রযুক্তি"/"কৃষিশিক্ষা" জাতীয়) অটো-বাদ — অধ্যায়-শনাক্তের আগেই
+  const cleanPages = autoStripRepeatedPageHeads(pages)
+
   // ৩) অধ্যায় শনাক্ত করে পৃষ্ঠা গ্রুপ করা
   const chapters: OcrChapter[] = []
   const preface: OcrPage[] = []
@@ -347,7 +475,7 @@ export function parseOcrBook(raw: string, opts?: { titleHint?: string | null }):
     cur = null
   }
 
-  for (const p of pages) {
+  for (const p of cleanPages) {
     const head = findChapterHeading(p.text)
     if (head) {
       pushCur()

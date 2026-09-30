@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
 import { parseOcrBook, cleanOcrText } from '@/lib/ocr-book'
+import { normalizeBnText } from '@/lib/bn'
 import { chunkContent, chunkPages, estimatePage } from '@/lib/chunk'
 import { invalidateChunkCache } from '@/lib/rag'
 import { startAutoEmbed } from '@/lib/book-jobs'
@@ -30,10 +31,11 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}))
   const appendBookId = body.bookId ? String(body.bookId).trim() : ''
-  const title = String(body.title ?? '').trim()
+  const title = normalizeBnText(String(body.title ?? '').trim())
   const subject = String(body.subject ?? '').trim()
   const level = body.level ? String(body.level).trim() : null
-  const text = String(body.text ?? '').replace(/\r\n?/g, '\n').trim()
+  // নরমালাইজ: য়/ড়/ঢ়-রূপভেদ এক করে + \r → \n — পরের সব ম্যাচিং এক রূপে চলে
+  const text = normalizeBnText(String(body.text ?? '')).replace(/\r\n?/g, '\n').trim()
 
   if (appendBookId && !/^[a-z0-9]+$/i.test(appendBookId)) {
     return NextResponse.json({ error: 'বইয়ের আইডি ভুল — আবার বাছো।' }, { status: 400 })
