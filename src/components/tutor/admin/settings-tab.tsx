@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Cpu, Loader2, Lock, Save, Sparkles } from 'lucide-react'
+import { Bot, Cpu, Loader2, Lock, Save, Sparkles, Zap } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -25,6 +25,8 @@ export function SettingsTab() {
   const [fallbackEnabled, setFallbackEnabled] = useState(true)
   // RAG লক — স্বাক্ষর পুল এখন "মডেল" ট্যাবে প্রতিটা মডেলের নিজস্ব হিসেবে থাকে
   const [ragOnlyMode, setRagOnlyMode] = useState(false)
+  // ⚡ উত্তর-ক্যাশ চালু/বন্ধ
+  const [cacheEnabled, setCacheEnabled] = useState(true)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -43,6 +45,7 @@ export function SettingsTab() {
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
+      setCacheEnabled(data.settings.cacheEnabled ?? true)
       setError(null)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : 'সেটিংস আনা গেল না, আবার চেষ্টা করো।')
@@ -94,6 +97,7 @@ export function SettingsTab() {
           zaiEnabled,
           fallbackEnabled,
           ragOnlyMode,
+          cacheEnabled,
         },
       })
       setChatModel(data.settings.chatModel)
@@ -104,6 +108,7 @@ export function SettingsTab() {
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
+      setCacheEnabled(data.settings.cacheEnabled ?? true)
       setSaved(true)
       if (hideTimer.current) clearTimeout(hideTimer.current)
       hideTimer.current = setTimeout(() => setSaved(false), SUCCESS_HIDE_MS)
@@ -269,6 +274,45 @@ export function SettingsTab() {
           <p className="text-xs text-stone-400">
             বন্ধ থাকলে বইয়ে উত্তর না পেলে মডেল নিজের জ্ঞান থেকেও উত্তর দেয় (বইয়ের বাইরের তথ্য
             বলে জানিয়ে দেয়)।
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* ⚡ উত্তর-ক্যাশ — রিপিট প্রশ্নে তাৎক্ষণিক উত্তর */}
+      <Card className="rounded-2xl border-emerald-100 bg-white py-0 shadow-sm">
+        <CardContent className="flex flex-col gap-4 p-4">
+          <div className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-emerald-600" />
+            <p className="text-sm font-semibold text-stone-800">উত্তর-ক্যাশ</p>
+          </div>
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-stone-100 bg-stone-50/60 p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-stone-800">
+                রিপিট প্রশ্নে ক্যাশ থেকে তাৎক্ষণিক উত্তর (হুবহু/প্রায়-হুবহু মিল)
+              </p>
+              <p className="text-xs leading-relaxed text-stone-500">
+                চালু থাকলে একই প্রশ্ন আবার এলে আগের উত্তর সঙ্গে সঙ্গে যায় — ইঞ্জিন-কল হয় না,
+                ফ্রি-কোটা বাঁচে আর ছাত্র উত্তর-অপেক্ষায় থাকে না (ছাত্রের কোটাও ফেরত যায়)।
+                প্রায়-হুবহু মিল মানে ছোটখাটো ভুল-বানান বা স্পেস-পার্থক্যেও ক্যাশ-হিট হয়।
+              </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-emerald-700">
+                ⚡ নিরাপত্তা: "পাইনি 📖" জাতীয় প্রত্যাখ্যান-উত্তর, ছবি-প্রশ্ন আর মিশ্র-লিপি-দূষিত উত্তর
+                কখনো ক্যাশ হয় না — বই যোগ হলে একই প্রশ্নে নতুন উত্তর আসবেই।
+              </p>
+            </div>
+            <Switch
+              checked={cacheEnabled}
+              onCheckedChange={(v) => {
+                setCacheEnabled(v)
+                markEdited()
+              }}
+              aria-label="উত্তর-ক্যাশ চালু/বন্ধ"
+              className="data-[state=checked]:bg-emerald-600"
+            />
+          </div>
+          <p className="text-xs text-stone-400">
+            বন্ধ করলে প্রতিটি প্রশ্ন সরাসরি AI-ইঞ্জিনে যাবে (নতুন উত্তর ক্যাশে জমাও হবে না) —
+            তখন পরিসংখ্যানের "ক্যাশ-হিট" বাড়বে না।
           </p>
         </CardContent>
       </Card>

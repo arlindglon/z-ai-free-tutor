@@ -6,8 +6,9 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkMath from 'remark-math'
 import remarkGfm from 'remark-gfm'
 import rehypeKatex from 'rehype-katex'
-import { BookOpen, ChevronDown, Square, Volume2 } from 'lucide-react'
+import { BookOpen, ChevronDown, Maximize2, Minus, Plus, RotateCcw, Square, Volume2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toBn } from '@/lib/bn'
 import { isTtsSupported, speakBengali, stopSpeaking } from '@/lib/speech'
 import type { BookReference } from '@/lib/types'
@@ -51,17 +52,115 @@ function sanitizeSvg(code: string): string {
     .replace(/javascript:/gi, '')
 }
 
-/** 🎨 SVG ছবি — একই chat request-এ LLM নিজেই আঁকল; শূন্য অতিরিক্ত খরচ */
-function SvgBlock({ code }: { code: string }) {
-  const html = useMemo(() => sanitizeSvg(code), [code])
+/** মূল <svg> ট্যাগ থেকে ফিক্সড width/height সরিয়ে ফ্লুইড স্কেলিং নিশ্চিত —
+ *  viewBox থাকলেই aspect-ratio ঠিক থাকে, কনটেইনার-প্রস্থে সুন্দরভাবে ফিট হয় (মোবাইলে কোনো স্ক্রল নেই) */
+function fluidifySvg(code: string): { html: string; aspect?: number } {
+  const vb = code.match(/viewBox="\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*"/i)
+  const aspect = vb ? Number(vb[3]) / Number(vb[4]) : undefined
+  const html = sanitizeSvg(code).replace(/<svg([^>]*)>/i, (_m: string, attrs: string) => {
+    const cleaned = attrs
+      .replace(/\s(width|height)\s*=\s*("[^"]*"|'[^']*')/gi, '')
+      .replace(/\sstyle\s*=\s*("[^"]*"|'[^']*')/gi, (s2: string) =>
+        s2.replace(/\s*(max-)?width\s*:\s*[^;"']+;?/gi, '')
+      )
+    return `<svg${cleaned} preserveAspectRatio="xMidYMid meet">`
+  })
+  return { html, aspect: aspect && Number.isFinite(aspect) && aspect > 0 ? aspect : undefined }
+}
+
+/** 🖼️ ডায়াগ্রাম-ফ্রেম — ইনলাইনে প্রস্থে ফিট (স্ক্রল নেই) + ফুলস্ক্রিন জুম-ভিউ।
+ *  ছাত্র ৯০% মোবাইলে — বিশাল চিত্র স্ক্রল করে দেখার দিন শেষ: বাবলে পুরো চিত্র এক নজরে,
+ *  আঁচলে (🔍) চাপলে পুরোস্ক্রিনে বড় করে জুম ১×–৩× করে গা ছমছম করে দেখা যায়। */
+function DiagramFrame({ html, aspect }: { html: string; aspect?: number }) {
+  const [open, setOpen] = useState(false)
+  const [zoom, setZoom] = useState(1)
+  const clampZoom = (z: number) => Math.min(3, Math.max(1, Math.round(z * 2) / 2))
   return (
-    <div className="my-2 overflow-x-auto rounded-xl border border-stone-200 bg-white p-2">
+    <figure className="my-3 overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+      <figcaption className="flex items-center justify-between gap-2 border-b border-stone-100 px-3 py-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-stone-400">চিত্র</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setZoom(1)
+            setOpen(true)
+          }}
+          aria-label="চিত্র বড় করে দেখাও"
+          className="h-7 gap-1 rounded-full px-2.5 text-xs text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
+          বড় করে দেখো
+        </Button>
+      </figcaption>
+      {/* ইনলাইন ভিউ — viewBox-অনুযায়ী aspect-ratio লক করা, svg প্রস্থের ১০০% — কোনো অনুভূমিক স্ক্রল নেই */}
       <div
-        className="min-w-[220px] [&>svg]:h-auto [&>svg]:max-w-full"
+        className="mx-auto w-full px-2 py-2 [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:w-full"
+        style={aspect ? { aspectRatio: String(aspect) } : undefined}
         dangerouslySetInnerHTML={{ __html: html }}
       />
-    </div>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[94vw] rounded-2xl border-stone-200 bg-white p-3 sm:max-w-3xl">
+          <DialogHeader className="flex-row items-center justify-between space-y-0">
+            <DialogTitle className="text-sm font-semibold text-stone-700">চিত্র — বড় করে দেখা</DialogTitle>
+            <div className="flex items-center gap-1" role="group" aria-label="জুম নিয়ন্ত্রণ">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setZoom((z) => clampZoom(z - 0.5))}
+                disabled={zoom <= 1}
+                aria-label="জুম কমাও"
+                className="h-8 w-8 rounded-full"
+              >
+                <Minus className="h-4 w-4" />
+              </Button>
+              <span className="w-11 text-center text-xs font-medium tabular-nums text-stone-500">
+                {toBn(Math.round(zoom * 100))}%
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setZoom((z) => clampZoom(z + 0.5))}
+                disabled={zoom >= 3}
+                aria-label="জুম বাড়াও"
+                className="h-8 w-8 rounded-full"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => setZoom(1)}
+                disabled={zoom === 1}
+                aria-label="জুম রিসেট"
+                className="h-8 w-8 rounded-full text-stone-500"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+            </div>
+          </DialogHeader>
+          <div className="max-h-[68vh] overflow-auto rounded-xl border border-stone-100 bg-white p-1">
+            <div
+              style={{ width: `${zoom * 100}%` }}
+              className="mx-auto [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:w-full"
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          </div>
+          <p className="text-center text-[11px] text-stone-400">ফিঙ্গার দিয়ে স্ক্রল করে চারদিকে দেখো — +/− দিয়ে ছোট-বড় করো</p>
+        </DialogContent>
+      </Dialog>
+    </figure>
   )
+}
+
+/** 🎨 SVG ছবি — একই chat request-এ LLM নিজেই আঁকল; শূন্য অতিরিক্ত খরচ */
+function SvgBlock({ code }: { code: string }) {
+  const { html, aspect } = useMemo(() => fluidifySvg(code), [code])
+  return <DiagramFrame html={html} aspect={aspect} />
 }
 
 /** মডেল-তৈরি mermaid-এর সবচেয়ে সাধারণ ভাঙা-সিনট্যাক্স রিপেয়ার:
@@ -129,12 +228,7 @@ function MermaidBlock({ code }: { code: string }) {
       </div>
     )
   }
-  return (
-    <div
-      className="my-2 overflow-x-auto rounded-xl border border-stone-200 bg-white p-3 [&>svg]:h-auto [&>svg]:max-w-full"
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
-  )
+  return <DiagramFrame html={svg} />
 }
 
 /** মার্কডাউন → স্টাইলড এলিমেন্ট (KaTeX-সহ)। মডিউল লেভেলে একবারই তৈরি। */

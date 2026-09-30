@@ -11,6 +11,8 @@ export type AppSettings = {
   fallbackEnabled: boolean
   /** RAG লক — চালু থাকলে শুধু বইয়ের রেফারেন্স থেকেই উত্তর দেবে */
   ragOnlyMode: boolean
+  /** ⚡ উত্তর-ক্যাশ — চালু থাকলে রিপিট প্রশ্নে ক্যাশ থেকে তাৎক্ষণিক উত্তর (ইঞ্জিন-খরচ শূন্য) */
+  cacheEnabled: boolean
 }
 
 /** ডিফল্ট: ফ্রি টিয়ারে চলে এমন আসল Gemini মডেল। অ্যাডমিন প্যানেল থেকে যেকোনো সময় বদলানো যায় */
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   zaiEnabled: true,
   fallbackEnabled: true,
   ragOnlyMode: false,
+  cacheEnabled: true,
 }
 
 let cache: { at: number; value: AppSettings } | null = null
@@ -45,6 +48,7 @@ export async function getSettings(): Promise<AppSettings> {
     zaiEnabled: parseBool(map.zaiEnabled, DEFAULT_SETTINGS.zaiEnabled),
     fallbackEnabled: parseBool(map.fallbackEnabled, DEFAULT_SETTINGS.fallbackEnabled),
     ragOnlyMode: parseBool(map.ragOnlyMode, DEFAULT_SETTINGS.ragOnlyMode),
+    cacheEnabled: parseBool(map.cacheEnabled, DEFAULT_SETTINGS.cacheEnabled),
   }
   cache = { at: Date.now(), value }
   return value
@@ -64,6 +68,7 @@ export async function putSettings(patch: Partial<AppSettings>): Promise<AppSetti
   if (typeof patch.zaiEnabled === 'boolean') entries.push(['zaiEnabled', String(patch.zaiEnabled)])
   if (typeof patch.fallbackEnabled === 'boolean') entries.push(['fallbackEnabled', String(patch.fallbackEnabled)])
   if (typeof patch.ragOnlyMode === 'boolean') entries.push(['ragOnlyMode', String(patch.ragOnlyMode)])
+  if (typeof patch.cacheEnabled === 'boolean') entries.push(['cacheEnabled', String(patch.cacheEnabled)])
   for (const [key, value] of entries) {
     await db.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
   }

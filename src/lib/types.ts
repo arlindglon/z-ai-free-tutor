@@ -105,6 +105,8 @@ export type SettingsInfo = {
   fallbackEnabled: boolean
   /** RAG লক — চালু থাকলে শুধু বইয়ের রেফারেন্স থেকেই উত্তর দেবে */
   ragOnlyMode: boolean
+  /** ⚡ উত্তর-ক্যাশ চালু/বন্ধ */
+  cacheEnabled: boolean
 }
 
 /** মডেল রেজিস্ট্রি — ইঞ্জিন প্রতি চ্যাট মডেল + প্রতিটার স্বাক্ষর পুল */

@@ -29,6 +29,7 @@ export async function PUT(req: NextRequest) {
     zaiEnabled: typeof body.zaiEnabled === 'boolean' ? body.zaiEnabled : undefined,
     fallbackEnabled: typeof body.fallbackEnabled === 'boolean' ? body.fallbackEnabled : undefined,
     ragOnlyMode: typeof body.ragOnlyMode === 'boolean' ? body.ragOnlyMode : undefined,
+    cacheEnabled: typeof body.cacheEnabled === 'boolean' ? body.cacheEnabled : undefined,
   })
   return NextResponse.json({ settings })
 }

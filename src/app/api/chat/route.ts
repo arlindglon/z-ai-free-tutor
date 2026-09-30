@@ -104,8 +104,9 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ⚡ স্তর ১: হুবহু-মিল ক্যাশ — এমবেডিং-কলও বাঁচে (ছবি-প্রশ্ন ক্যাশে যায় না)
-    if (!image) {
+    // ⚡ স্তর ১: হুবহু-মিল ক্যাশ — এমবেডিং-কলও বাঁচে (ছবি-প্রশ্ন ক্যাশে যায় না;
+    // অ্যাডমিন ক্যাশ বন্ধ করলে প্রতিটি প্রশ্ন সরাসরি ইঞ্জিনে যায়)
+    if (!image && settings.cacheEnabled) {
       const exact = await findCachedAnswer(question, null, settings.embeddingModel, settings.ragOnlyMode).catch(
         () => null
       )
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
     const refs = await retrieveHybrid(question, queryVec, subject, 3)
 
     // ⚡ স্তর ২: এমবেডিং-সাদৃশ্য ক্যাশ (cosine ≥ ০.৯৫) — ছোট-বড় ভুল-বানান/শব্দ-ক্রমেও হিট
-    if (!image && queryVec) {
+    if (!image && queryVec && settings.cacheEnabled) {
       const similar = await findCachedAnswer(question, queryVec, settings.embeddingModel, settings.ragOnlyMode).catch(
         () => null
       )
@@ -289,8 +290,8 @@ export async function POST(req: NextRequest) {
     const answerTag = await pickModelAlias(result.modelId)
 
     // ⚡ সফল, প্রত্যাখ্যান-বিহীন, মিশ্র-লিপি-মুক্ত টেক্সট-উত্তর ক্যাশে জমা —
-    // দূষিত উত্তর ক্যাশে গেলে রিপিট-প্রশ্নেও দূষিতই ফেরত যেত
-    if (!image && !isCleanRefusal(result.text) && countMixedScriptWords(result.text) === 0) {
+    // দূষিত উত্তর ক্যাশে গেলে রিপিট-প্রশ্নেও দূষিতই ফেরত যেত; ক্যাশ বন্ধ থাকলে সেভও হয় না
+    if (settings.cacheEnabled && !image && !isCleanRefusal(result.text) && countMixedScriptWords(result.text) === 0) {
       await saveToCache({
         question,
         answer: result.text,
