@@ -24,6 +24,69 @@ export function bnToNumber(s: string): number | null {
 const PAGE_RE =
   /^[ \t]*(?:#{1,6})?[ \t]*\*{0,2}[ \t]*(?:পৃষ্ঠা|পেজ|page)[ \t]*(?:#|:|：|-|–|—)?[ \t]*([০-৯0-9]+)[ \t]*\*{0,2}[ \t]*$/i
 
+/**
+ * লাইনের ভেতরে জড়িয়ে থাকা "পৃষ্ঠা N" মার্কার খুলে আলাদা লাইনে সাজানোর নিয়ম (PDF-কপি ফরম্যাট):
+ *   "পৃষ্ঠা ১১কৃষি প্রযুক্তিজমি চাষের বিবেচ্য বিষয়" — মার্কারের সাথেই লেখা জমা
+ *   "।   পৃষ্ঠা ১২   কৃষিশিক্ষা   তৃতীয় পরিচ্ছেদ..." — মাঝখানে মার্কার
+ * মার্কার বলতে শর্ত — সংখ্যার পরে হয় জমাট বাংলা অক্ষর (স্পেস ছাড়া), নয় ২+ স্পেস।
+ * ফলে ভাঙবে না: চলমান বাক্য ("পৃষ্ঠা ৫ দেখো", "পৃষ্ঠা ৭-এ ছবি", "পৃষ্ঠা ৫।"),
+ * সূচিপত্রের লাইন-শেষ সংখ্যা ("... পৃষ্ঠা ১২")। লুকঅ্যাহেডে বাংলা সংখ্যা ০-৯ বাদ —
+ * নইলে backtracking করে "পৃষ্ঠা ১২" ভেঙে "পৃষ্ঠা ১"+"২" বানিয়ে ফেলত।
+ */
+const INLINE_MARKER_RE =
+  /(^|[\t ]|[।!?,;:()"'‘’“”\-–—])((?:পৃষ্ঠা|পেজ|page)[ \t]*(?:#|:|：)?[ \t]*[০-৯0-9]+)(?=[ \t]{2,}|[\u0980-\u09E5\u09F0-\u09FF])/g
+
+/** PDF-কপি টেক্সটে লাইনের ভেতরে জমানো "পৃষ্ঠা N" মার্কার আলাদা লাইনে খুলে দাও */
+function unwrapInlinePageMarkers(text: string): string {
+  return text
+    .split('\n')
+    .map((ln) => {
+      // আগে থেকেই স্ট্যান্ডঅ্যালোন মার্কার-লাইন ("### পৃষ্ঠা ১") হলে না ধরাই ভালো
+      if (PAGE_RE.test(ln)) return ln
+      return ln.replace(INLINE_MARKER_RE, (_m, pre: string, marker: string) => `${pre}\n${marker}\n`)
+    })
+    .join('\n')
+}
+
+/**
+ * পেজ-শুরুর রানিং-হেডার (বইয়ের নাম/বিষয় — PDF-এর প্রতি পৃষ্ঠার মাথায় যেটা লেগে থাকে) বাদ।
+ * শর্ট প্রার্থী (৬ অক্ষরের কম) জমাট লেখার সাথে মিললে বাদ দেওয়া হয় না —
+ * নইলে "কৃষি" প্রার্থী "কৃষিশিক্ষাiv)" ভেঙে "শিক্ষাiv)" বানিয়ে ফেলত।
+ */
+function stripRunningHeaders(body: string, titleHint: string): string {
+  const t = titleHint.trim()
+  if (!t) return body
+  const words = t.split(/[ \t]+/).filter(Boolean)
+  const cands: { text: string; gluedOk: boolean }[] = []
+  if (t.length >= 3) cands.push({ text: t, gluedOk: t.length >= 6 })
+  const compact = t.replace(/[ \t]+/g, '')
+  if (compact !== t && compact.length >= 6) cands.push({ text: compact, gluedOk: true })
+  if (words.length >= 2) {
+    const two = words.slice(0, 2).join(' ')
+    if (two !== t && two.length >= 6) cands.push({ text: two, gluedOk: true })
+  }
+  if (words[0] && words[0].length >= 3 && words[0] !== t) {
+    cands.push({ text: words[0], gluedOk: words[0].length >= 6 })
+  }
+  // লম্বা প্রার্থী আগে — ছোটটা ভুলভাবে অর্ধেক শব্দ কেটে ফেলা এড়াতে
+  cands.sort((a, b) => b.text.length - a.text.length)
+
+  let out = body
+  // পেজ-হেডার + অধ্যায়-হেডার — সর্বোচ্চ ২ স্তর লাগতে পারে
+  for (let round = 0; round < 2; round++) {
+    let changed = false
+    for (const c of cands) {
+      if (!out.startsWith(c.text)) continue
+      const rest = out.slice(c.text.length)
+      if (!c.gluedOk && rest && !/^[\s।!?,;:()"'\-–—]/.test(rest)) continue
+      out = rest.replace(/^[ \t।]+/, '')
+      changed = true
+    }
+    if (!changed) break
+  }
+  return out
+}
+
 /** অধ্যায়-কীওয়ার্ড দিয়ে শুরু হওয়া লাইন (শিরোনাম প্রার্থী) */
 const CHAPTER_KEYWORD_RE =
   /^(?:#{1,6}[ \t]*)?\*{0,2}[ \t]*(অধ্যায়|অধায়|অধযায়|অনুচ্ছেদ|পাঠ|ইউনিট|chapter|unit|lesson)/i
@@ -220,9 +283,12 @@ function findChapterHeading(pageText: string): { title: string; number: number |
 /**
  * OCR টেক্সট → পৃষ্ঠার তালিকা + অধ্যায়ের গ্রুপ।
  * মার্কার না থাকলে: একটাই অধ্যায় "সম্পূর্ণ বই" (pages খালি — সার্ভারে পুরো লেখা chunkContent হবে)।
+ * opts.titleHint = বইয়ের নাম — PDF-কপিতে পেজ-মাথার রানিং-হেডার ("কৃষি প্রযুক্তিজমি চাষের...")
+ * বইয়ের নাম মিললে বাদ দেওয়া হয়, আর লাইনের ভেতরে জমানো "পৃষ্ঠা N" মার্কারও খুলে পৃষ্ঠা-ভাগ হয়।
  */
-export function parseOcrBook(raw: string): OcrParseResult {
-  const text = raw.replace(/\r\n?/g, '\n').trim()
+export function parseOcrBook(raw: string, opts?: { titleHint?: string | null }): OcrParseResult {
+  const titleHint = (opts?.titleHint ?? '').trim()
+  const text = unwrapInlinePageMarkers(raw.replace(/\r\n?/g, '\n').trim())
   const lines = text.split('\n')
 
   // ১) পৃষ্ঠা-মার্কার লাইন খোঁজো
@@ -245,7 +311,8 @@ export function parseOcrBook(raw: string): OcrParseResult {
   }
 
   // ২) পৃষ্ঠা ভাগ — দুই মার্কারের মাঝের লেখা এক পৃষ্ঠা ("---" বিভাজক বাদ)
-  //    প্রতিটি পৃষ্ঠার টেক্সট সাথে সাথেই পরিষ্কার — টেবিল/<br>/ল্যাটেক্স নরমালাইজ হয়ে যায়
+  //    প্রতিটি পৃষ্ঠার টেক্সট সাথে সাথেই পরিষ্কার — টেবিল/<br>/ল্যাটেক্স নরমালাইজ হয়ে যায়;
+  //    শুরুর রানিং-হেডার (বইয়ের নাম) থাকলে সেটাও বাদ — হেডার-শুধু পৃষ্ঠা হলে বাদই যায়
   const pages: OcrPage[] = []
   for (let k = 0; k < markers.length; k++) {
     const from = markers[k].line + 1
@@ -255,7 +322,10 @@ export function parseOcrBook(raw: string): OcrParseResult {
       .filter((ln) => !SEPARATOR_RE.test(ln))
       .join('\n')
       .trim()
-    if (body) pages.push({ page: markers[k].page, text: cleanOcrText(body) })
+    if (!body) continue
+    const cleaned = cleanOcrText(body)
+    const stripped = titleHint ? stripRunningHeaders(cleaned, titleHint).trim() : cleaned
+    if (stripped) pages.push({ page: markers[k].page, text: stripped })
   }
   if (pages.length === 0) {
     return {

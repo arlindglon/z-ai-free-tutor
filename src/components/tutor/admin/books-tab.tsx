@@ -147,8 +147,8 @@ export function BooksTab() {
     return () => clearTimeout(t)
   }, [text])
   const parsedPreview = useMemo(
-    () => (debouncedText.trim().length > 0 ? parseOcrBook(debouncedText) : null),
-    [debouncedText]
+    () => (debouncedText.trim().length > 0 ? parseOcrBook(debouncedText, { titleHint: title }) : null),
+    [debouncedText, title]
   )
 
   // ---------- প্রম্পট কপি ----------

@@ -67,7 +67,8 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const parsed = parseOcrBook(text)
+  // titleHint = বইয়ের নাম — PDF-কপি টেক্সটে জমানো "পৃষ্ঠা N" মার্কার খোলা ও রানিং-হেডার বাদ দিতে লাগে
+  const parsed = parseOcrBook(text, { titleHint: appendBook?.title ?? title })
 
   // অধ্যায়-ইনপুট তৈরি: মার্কার থাকলে প্রকৃত পৃষ্ঠা নম্বরে চাঙ্ক, না থাকলে পুরো লেখা এক অধ্যায়
   const chapterInputs = parsed.usedMarkers
