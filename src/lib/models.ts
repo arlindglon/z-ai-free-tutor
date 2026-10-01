@@ -1,4 +1,5 @@
 import { db } from '@/lib/db'
+import { isEngineId } from '@/lib/key-format'
 import type { EngineId } from '@/lib/types'
 
 /**
@@ -10,7 +11,7 @@ import type { EngineId } from '@/lib/types'
  * - স্টুডেন্ট প্রশ্নে কোনো স্বাক্ষর-কোড লিখলে সেই মডেল/ইঞ্জিনেই উত্তর রাউট হয়
  */
 
-/** প্রথমবার সিড হওয়া ডিফল্ট মডেল — Z.ai ফ্রি ফ্ল্যাশ + গুগল ফ্রি টিয়ার (API আইডি ছোট হাতের) */
+/** প্রথমবার সিড হওয়া ডিফল্ট মডেল — Z.ai ফ্রি ফ্ল্যাশ + গুগল ফ্রি টিয়ার + নিজস্ব gemini-web প্রক্সি (API আইডি ছোট হাতের) */
 export const DEFAULT_MODELS: { engine: EngineId; modelId: string; label: string }[] = [
   { engine: 'zai', modelId: 'glm-4.7-flash', label: 'GLM-4.7-Flash' },
   { engine: 'zai', modelId: 'glm-4.5-flash', label: 'GLM-4.5-Flash' },
@@ -19,7 +20,10 @@ export const DEFAULT_MODELS: { engine: EngineId; modelId: string; label: string 
   { engine: 'gemini', modelId: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite' },
   { engine: 'gemini', modelId: 'gemma-4-26b', label: 'Gemma 4 26B' },
   { engine: 'gemini', modelId: 'gemma-4-31b', label: 'Gemma 4 31B' },
+  { engine: 'gemini-web', modelId: 'gemini-3.5-flash-lite', label: 'Gemini Web 3.5 Flash Lite' },
+  { engine: 'gemini-web', modelId: 'gemini-3.6-flash', label: 'Gemini Web 3.6 Flash' },
 ]
+
 
 const CACHE_TTL_MS = 15_000
 const ALIAS_CACHE_LIMIT = 2000 // সেফটি ক্যাপ — স্বাক্ষর যত খুশি হোক, ক্যাশে সর্বোচ্চ এতগুলো
@@ -63,9 +67,9 @@ async function loadRegistry(): Promise<RegistryCache> {
       take: ALIAS_CACHE_LIMIT,
     }),
   ])
-  const active: Record<EngineId, ActiveModel[]> = { gemini: [], zai: [] }
+  const active: Record<EngineId, ActiveModel[]> = { gemini: [], zai: [], 'gemini-web': [] }
   for (const m of models) {
-    if (m.engine === 'gemini' || m.engine === 'zai') {
+    if (isEngineId(m.engine)) {
       active[m.engine].push({ id: m.id, modelId: m.modelId })
     }
   }
@@ -73,7 +77,7 @@ async function loadRegistry(): Promise<RegistryCache> {
     at: Date.now(),
     active,
     aliases: aliases
-      .filter((a) => a.aiModel.engine === 'gemini' || a.aiModel.engine === 'zai')
+      .filter((a) => isEngineId(a.aiModel.engine))
       .map((a) => ({
         text: a.alias,
         key: a.alias.toLowerCase(),

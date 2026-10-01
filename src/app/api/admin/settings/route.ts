@@ -22,12 +22,13 @@ export async function PUT(req: NextRequest) {
     embeddingModel: body.embeddingModel !== undefined ? String(body.embeddingModel) : undefined,
     dailyCredits: body.dailyCredits !== undefined ? Number(body.dailyCredits) : undefined,
     primaryEngine:
-      body.primaryEngine === 'gemini' || body.primaryEngine === 'zai'
+      body.primaryEngine === 'gemini' || body.primaryEngine === 'zai' || body.primaryEngine === 'gemini-web'
         ? body.primaryEngine
         : undefined,
     geminiEnabled: typeof body.geminiEnabled === 'boolean' ? body.geminiEnabled : undefined,
     zaiEnabled: typeof body.zaiEnabled === 'boolean' ? body.zaiEnabled : undefined,
     fallbackEnabled: typeof body.fallbackEnabled === 'boolean' ? body.fallbackEnabled : undefined,
+    geminiWebEnabled: typeof body.geminiWebEnabled === 'boolean' ? body.geminiWebEnabled : undefined,
     ragOnlyMode: typeof body.ragOnlyMode === 'boolean' ? body.ragOnlyMode : undefined,
     cacheEnabled: typeof body.cacheEnabled === 'boolean' ? body.cacheEnabled : undefined,
   })

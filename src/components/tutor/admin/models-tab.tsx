@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Bot,
   Check,
+  Globe,
   Loader2,
   Pencil,
   Plus,
@@ -25,7 +26,7 @@ import { toBn } from '@/lib/bn'
 import type { EngineId, ModelInfo } from '@/lib/types'
 
 /**
- * মডেল রেজিস্ট্রি — দুই ইঞ্জিনের সব চ্যাট মডেল এক জায়গায়:
+ * মডেল রেজিস্ট্রি — তিন ইঞ্জিনের সব চ্যাট মডেল এক জায়গায়:
  * - নতুন মডেল এলে শুধু নাম লিখে যোগ করো (কোড ছোঁয়ার দরকার নেই)
  * - প্রতিটা মডেলের নিজস্ব on/off সুইচ
  * - প্রতিটা মডেলের নিজস্ব স্বাক্ষর পুল — লাইন বাই লাইন যত খুশি নাম/কোড,
@@ -48,9 +49,15 @@ const ENGINE_META: Record<
     accent: 'text-amber-600',
     ring: 'border-amber-100',
   },
+  'gemini-web': {
+    name: 'Gemini Web মডেল (নিজস্ব সার্ভার)',
+    sub: 'নিজস্ব সার্ভারের gemini-web প্রক্সি — AI-স্টুডিও কোটা শেষ হলে এই পথে উত্তর',
+    accent: 'text-sky-600',
+    ring: 'border-sky-100',
+  },
 }
 
-const ENGINES: EngineId[] = ['gemini', 'zai']
+const ENGINES: EngineId[] = ['gemini', 'zai', 'gemini-web']
 const SUCCESS_HIDE_MS = 4000
 
 export function ModelsTab() {
@@ -63,6 +70,7 @@ export function ModelsTab() {
   const [form, setForm] = useState<Record<EngineId, { modelId: string; label: string }>>({
     gemini: { modelId: '', label: '' },
     zai: { modelId: '', label: '' },
+    'gemini-web': { modelId: '', label: '' },
   })
   const [aliasDraft, setAliasDraft] = useState<Record<string, string>>({})
   const [addingAliasFor, setAddingAliasFor] = useState<string | null>(null)
@@ -294,6 +302,8 @@ export function ModelsTab() {
               <div className="flex items-center gap-2">
                 {engine === 'gemini' ? (
                   <Sparkles className={`h-4 w-4 ${meta.accent}`} />
+                ) : engine === 'gemini-web' ? (
+                  <Globe className={`h-4 w-4 ${meta.accent}`} />
                 ) : (
                   <Bot className={`h-4 w-4 ${meta.accent}`} />
                 )}
@@ -338,7 +348,7 @@ export function ModelsTab() {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') void handleAddModel(engine)
                     }}
-                    placeholder={engine === 'zai' ? 'GLM-4.5-Flash' : 'Gemini 3.5 Flash Lite'}
+                    placeholder={engine === 'zai' ? 'GLM-4.5-Flash' : engine === 'gemini-web' ? 'Gemini Web 3.5 Flash Lite' : 'Gemini 3.5 Flash Lite'}
                     className="h-10 border-stone-200 text-sm focus-visible:ring-emerald-300"
                   />
                 </div>

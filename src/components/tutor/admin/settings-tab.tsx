@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Cpu, Loader2, Lock, Save, Sparkles, Trash2, Zap } from 'lucide-react'
+import { Bot, Cpu, Globe, Loader2, Lock, Save, Sparkles, Trash2, Zap } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,6 +33,8 @@ export function SettingsTab() {
   const [geminiEnabled, setGeminiEnabled] = useState(true)
   const [zaiEnabled, setZaiEnabled] = useState(true)
   const [fallbackEnabled, setFallbackEnabled] = useState(true)
+  // 🌐 তৃতীয় ইঞ্জিন — নিজস্ব সার্ভারের gemini-web প্রক্সি
+  const [geminiWebEnabled, setGeminiWebEnabled] = useState(false)
   // RAG লক — স্বাক্ষর পুল এখন "মডেল" ট্যাবে প্রতিটা মডেলের নিজস্ব হিসেবে থাকে
   const [ragOnlyMode, setRagOnlyMode] = useState(false)
   // ⚡ উত্তর-ক্যাশ চালু/বন্ধ
@@ -58,6 +60,7 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
+      setGeminiWebEnabled(data.settings.geminiWebEnabled ?? false)
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setCacheEnabled(data.settings.cacheEnabled ?? true)
       setError(null)
@@ -92,12 +95,13 @@ export function SettingsTab() {
       setError('দৈনিক প্রশ্ন কোটা সঠিক পজিটিভ সংখ্যা দাও (১–১০০০)।')
       return
     }
-    if (!geminiEnabled && !zaiEnabled) {
-      setError('অন্তত একটা ইঞ্জিন চালু রাখো — দুটোই বন্ধ থাকলে শিক্ষার্থী উত্তর পাবে না।')
+    if (!geminiEnabled && !zaiEnabled && !geminiWebEnabled) {
+      setError('অন্তত একটা ইঞ্জিন চালু রাখো — সব বন্ধ থাকলে শিক্ষার্থী উত্তর পাবে না।')
       return
     }
     if (!geminiEnabled && primaryEngine === 'gemini') setPrimaryEngine('zai')
     if (!zaiEnabled && primaryEngine === 'zai') setPrimaryEngine('gemini')
+    if (!geminiWebEnabled && primaryEngine === 'gemini-web') setPrimaryEngine('gemini')
     setSaving(true)
     try {
       const data = await api<{ settings: SettingsInfo }>('/api/admin/settings', {
@@ -106,10 +110,11 @@ export function SettingsTab() {
           chatModel: chatModel.trim(),
           embeddingModel: embeddingModel.trim(),
           dailyCredits: credits,
-          primaryEngine: !geminiEnabled ? 'zai' : !zaiEnabled ? 'gemini' : primaryEngine,
+          primaryEngine: !geminiEnabled ? (!zaiEnabled && geminiWebEnabled ? 'gemini-web' : 'zai') : primaryEngine,
           geminiEnabled,
           zaiEnabled,
           fallbackEnabled,
+          geminiWebEnabled,
           ragOnlyMode,
           cacheEnabled,
         },
@@ -121,6 +126,7 @@ export function SettingsTab() {
       setGeminiEnabled(data.settings.geminiEnabled)
       setZaiEnabled(data.settings.zaiEnabled)
       setFallbackEnabled(data.settings.fallbackEnabled)
+      setGeminiWebEnabled(data.settings.geminiWebEnabled ?? false)
       setRagOnlyMode(data.settings.ragOnlyMode ?? false)
       setCacheEnabled(data.settings.cacheEnabled ?? true)
       setSaved(true)
@@ -176,7 +182,7 @@ export function SettingsTab() {
             <RadioGroup
               value={primaryEngine}
               onValueChange={(v) => {
-                setPrimaryEngine(v === 'zai' ? 'zai' : 'gemini')
+                setPrimaryEngine(v === 'zai' || v === 'gemini-web' ? v : 'gemini')
                 markEdited()
               }}
               className="flex flex-col gap-2 sm:flex-row"
@@ -209,6 +215,21 @@ export function SettingsTab() {
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-stone-800">Z.ai GLM</p>
                   <p className="text-xs text-stone-500">Z.ai ফ্রি কী-পুল</p>
+                </div>
+              </label>
+              <label
+                htmlFor="eng-web"
+                className={`flex flex-1 cursor-pointer items-center gap-3 rounded-2xl border p-3 transition-colors ${
+                  primaryEngine === 'gemini-web'
+                    ? 'border-sky-400 bg-sky-50'
+                    : 'border-stone-200 bg-white hover:border-sky-200'
+                } ${!geminiWebEnabled ? 'opacity-50' : ''}`}
+              >
+                <RadioGroupItem id="eng-web" value="gemini-web" disabled={!geminiWebEnabled} />
+                <Globe className="h-4 w-4 shrink-0 text-sky-600" />
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-stone-800">Gemini Web</p>
+                  <p className="text-xs text-stone-500">নিজস্ব সার্ভার (কোটা-মুক্ত)</p>
                 </div>
               </label>
             </RadioGroup>
@@ -247,9 +268,26 @@ export function SettingsTab() {
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
+                <p className="text-sm font-medium text-stone-800">Gemini Web (নিজস্ব সার্ভার)</p>
+                <p className="text-xs text-stone-500">
+                  নিজস্ব সার্ভারের প্রক্সি — AI-স্টুডিও/Z.ai কোটা শেষ হলে এই পথে উত্তর যায়
+                </p>
+              </div>
+              <Switch
+                checked={geminiWebEnabled}
+                onCheckedChange={(v) => {
+                  setGeminiWebEnabled(v)
+                  markEdited()
+                }}
+                aria-label="Gemini Web ইঞ্জিন চালু/বন্ধ"
+                className="data-[state=checked]:bg-sky-600"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-stone-800">অটো-ফলব্যাক</p>
                 <p className="text-xs text-stone-500">
-                  মূল ইঞ্জিন ফেইল/ব্যস্ত হলে অন্যটা অটো উত্তর দেবে — শিক্ষার্থী কখনো এরর দেখবে না
+                  মূল ইঞ্জিন ফেইল/ব্যস্ত হলে বাকি চালু ইঞ্জিনগুলো ক্রমে অটো উত্তর দেবে — শিক্ষার্থী কখনো এরর দেখবে না
                 </p>
               </div>
               <Switch
@@ -264,6 +302,7 @@ export function SettingsTab() {
             </div>
             <p className="text-xs text-stone-400">
               নোট: বই-খোঁজার এমবেডিং সবসময় Gemini দিয়ে হয় — জেমিনাই ইঞ্জিন বন্ধ থাকলে লেক্সিকাল সার্চ চলবে।
+              Gemini Web-এর কী ফরম্যাট: baseUrl|apiKey (যেমন https://নিজস্ব-সার্ভার:8083|sk-gemini-...) — "API কী" ট্যাবে যোগ করো।
             </p>
           </div>
         </CardContent>

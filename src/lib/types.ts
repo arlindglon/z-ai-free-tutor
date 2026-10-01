@@ -43,7 +43,7 @@ export type HistoryMessage = {
   createdAt: string
 }
 
-export type EngineId = 'gemini' | 'zai'
+export type EngineId = 'gemini' | 'zai' | 'gemini-web'
 
 export type ApiKeyInfo = {
   id: string
@@ -103,6 +103,8 @@ export type SettingsInfo = {
   zaiEnabled: boolean
   /** মূল ইঞ্জিন ফেইল করলে অন্য ইঞ্জিন অটো-চেষ্টা হবে কি না */
   fallbackEnabled: boolean
+  /** 🌐 তৃতীয় ইঞ্জিন — নিজস্ব সার্ভারের gemini-web প্রক্সি চালু/বন্ধ */
+  geminiWebEnabled?: boolean
   /** RAG লক — চালু থাকলে শুধু বইয়ের রেফারেন্স থেকেই উত্তর দেবে */
   ragOnlyMode: boolean
   /** ⚡ উত্তর-ক্যাশ চালু/বন্ধ */

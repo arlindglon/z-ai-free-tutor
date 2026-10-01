@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
 import { invalidateModelCache, ensureModelsSeeded } from '@/lib/models'
+import { isEngineId } from '@/lib/key-format'
 import type { EngineId, ModelInfo } from '@/lib/types'
 
 /**
@@ -73,7 +74,7 @@ export async function GET() {
     const usageMap = new Map(usage.map((u) => [u.answerModel, u._count._all]))
     const list: ModelInfo[] = models.map((m) => ({
       id: m.id,
-      engine: m.engine === 'zai' ? 'zai' : 'gemini',
+      engine: isEngineId(m.engine) ? m.engine : 'gemini',
       modelId: m.modelId,
       label: m.label,
       active: m.active,
@@ -93,7 +94,7 @@ export async function POST(req: NextRequest) {
   const { err } = await requireAdmin()
   if (err) return err
   const body = await req.json().catch(() => ({}))
-  const engine: EngineId = body.engine === 'zai' ? 'zai' : 'gemini'
+  const engine: EngineId = isEngineId(body.engine) ? body.engine : 'gemini'
   const modelId = cleanModelId(String(body.modelId ?? ''))
   const label = String(body.label ?? '').trim().slice(0, 120) || null
 

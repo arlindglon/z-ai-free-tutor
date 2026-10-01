@@ -11,6 +11,7 @@ import {
 } from '@/lib/keypool'
 import { generateContent, type GeneratedAnswer, type ChatImage } from '@/lib/gemini'
 import { zaiChat, zaiChatWithKey, tuneZaiCapacity, zaiDefaultModel, zaiEnvConfigured } from '@/lib/zai'
+import { geminiWebChatWithKey, geminiWebDefaultModel } from '@/lib/gemini-web'
 import { getActiveModelIds } from '@/lib/models'
 import { DEFAULT_SETTINGS, type AppSettings } from '@/lib/settings'
 import type { EngineId } from '@/lib/types'
@@ -43,7 +44,9 @@ async function attemptWithModels(
   const fallback =
     engine === 'gemini'
       ? settings.chatModel || DEFAULT_SETTINGS.chatModel
-      : zaiDefaultModel()
+      : engine === 'zai'
+        ? zaiDefaultModel()
+        : geminiWebDefaultModel()
   const registryModels = await getActiveModelIds(engine, fallback)
   // জেতা স্বাক্ষর-কোডের মডেল থাকলে তালিকার একেবারে আগে
   const models = forceModelId
@@ -58,6 +61,13 @@ async function attemptWithModels(
         if (keys.length === 0) throw new GeminiError(503, 'NO_KEYS')
         const r = await generateContent(prompt, system, model, image)
         return { ...r, modelId: model }
+      }
+      if (engine === 'gemini-web') {
+        // 🌐 নিজস্ব সার্ভারের gemini-web প্রক্সি — কী = baseUrl|apiKey, OpenAI-কম্প্যাটিবল
+        const text = await withKeyFailover('gemini-web', (key) =>
+          geminiWebChatWithKey(key, system, prompt, model, image)
+        )
+        return { text, blocked: false, modelId: model }
       }
       const keys = await getActiveKeys('zai')
       if (keys.length === 0) break // Z.ai কী নেই → নিচে sandbox/env পথ
@@ -136,17 +146,20 @@ export async function generateTutorAnswer(
   force?: ForceModel,
   image?: ChatImage
 ): Promise<EngineResult> {
-  const primary: EngineId = settings.primaryEngine === 'zai' ? 'zai' : 'gemini'
-  const secondary: EngineId = primary === 'gemini' ? 'zai' : 'gemini'
+  // তিন ইঞ্জিন — মূল আগে, বাকিগুলো নির্দিষ্ট ক্রমে পেছনে (fallbackEnabled হলে):
+  // নিজস্ব-সার্ভার (gemini-web) শেষ হোক — AI-স্টুডিও/Z.ai ফ্রি-কোটা শেষ হলে তবেই এই সার্ভার মেঘে চাপ পড়ুক
+  const all: EngineId[] = ['gemini', 'zai', 'gemini-web']
   const enabled: Record<EngineId, boolean> = {
     gemini: settings.geminiEnabled,
     zai: settings.zaiEnabled,
+    'gemini-web': settings.geminiWebEnabled,
   }
-
-  const order: EngineId[] = []
-  if (enabled[primary]) order.push(primary)
-  if (settings.fallbackEnabled && enabled[secondary] && !order.includes(secondary)) {
-    order.push(secondary)
+  const primary: EngineId = enabled[settings.primaryEngine] ? settings.primaryEngine : 'gemini'
+  const order: EngineId[] = [primary]
+  if (settings.fallbackEnabled) {
+    for (const e of all) {
+      if (e !== primary && enabled[e]) order.push(e)
+    }
   }
   if (order.length === 0) throw new GeminiError(503, 'NO_ENGINES_ENABLED')
 

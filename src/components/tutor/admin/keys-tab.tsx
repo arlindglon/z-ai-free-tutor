@@ -13,9 +13,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { api, ApiError } from '@/lib/api'
 import { detectKeyEngine } from '@/lib/key-format'
+import { isEngineId } from '@/lib/key-format'
 import type { ApiKeyInfo, EngineId } from '@/lib/types'
 
-const ENGINE_LABEL: Record<EngineId, string> = { gemini: 'জেমিনাই', zai: 'Z.ai GLM' }
+const ENGINE_LABEL: Record<EngineId, string> = { gemini: 'জেমিনাই', zai: 'Z.ai GLM', 'gemini-web': 'Gemini Web' }
 
 export function KeysTab() {
   const [keys, setKeys] = useState<ApiKeyInfo[] | null>(null)
@@ -139,7 +140,7 @@ export function KeysTab() {
               <Label htmlFor="key-engine" className="text-stone-700">
                 ইঞ্জিন
               </Label>
-              <Select value={engine} onValueChange={(v) => setEngine(v === 'zai' ? 'zai' : 'gemini')}>
+              <Select value={engine} onValueChange={(v) => setEngine(isEngineId(v) ? v : 'gemini')}>
                 <SelectTrigger
                   id="key-engine"
                   className="h-11 border-stone-200 focus-visible:ring-emerald-300"
@@ -149,6 +150,7 @@ export function KeysTab() {
                 <SelectContent>
                   <SelectItem value="gemini">জেমিনাই (Google AI Studio)</SelectItem>
                   <SelectItem value="zai">Z.ai GLM (z.ai Model API)</SelectItem>
+                  <SelectItem value="gemini-web">Gemini Web (নিজস্ব সার্ভার)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -180,7 +182,13 @@ export function KeysTab() {
                       const detected = detectKeyEngine(e.target.value)
                       if (detected) setEngine(detected)
                     }}
-                    placeholder={engine === 'zai' ? 'Z.ai key পেস্ট করো' : 'AIzaSy... পেস্ট করো'}
+                    placeholder={
+                      engine === 'zai'
+                        ? 'Z.ai key পেস্ট করো'
+                        : engine === 'gemini-web'
+                          ? 'https://নিজস্ব-সার্ভার:8083|sk-gemini-...'
+                          : 'AIzaSy... পেস্ট করো'
+                    }
                     type={showKey ? 'text' : 'password'}
                     autoComplete="off"
                     required

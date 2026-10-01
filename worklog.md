@@ -696,3 +696,29 @@ Stage Summary:
 - ডায়াগ্রাম এখন সর্বোচ্চ ~৪৫vh উঁচু হয়ে মাঝে বসে — মোবাইল/ডেস্কটপে স্ক্রল ছাড়াই পুরো চিত্র এক নজরে; বিস্তারিত "বড় করে দেখো"-জুমে
 - প্রম্পট এখন পেন্সিল-শেডিং/গ্রেডিয়েন্ট/সঠিক-অনুপাতের বাস্তবধর্মী খাতা-আঁকা চায়; পুরনো জমা উত্তর বাদ দিতে অ্যাডমিন "ক্যাশ মুছুন" — মোছার পরেই নতুন স্টাইলের চিত্র আসবে
 - উত্তর-ক্যাশ on/off সুইচ আগেই ছিল (fd02575); এবার সঙ্গে ক্যাশ-ক্লিয়ার বোতামও
+
+---
+Task ID: 13
+Agent: main (Z.ai Code)
+Task: ডায়াগ্রাম "কিছুই দেখাচ্ছে না" তদন্ত + ৪টা unofficial Gemini API যাচাই + তৃতীয় ইঞ্জিন (gemini-web) ইন্টিগ্রেশন
+
+Work Log:
+- তদন্ত: লোকালে ইতিহাসে SVG+Mermaid-উত্তর ঢুকিয়ে ছাত্র-ভিউ ব্রাউজারে দেখা — দুটোই রেন্ডার হয় (SVG ৩০০×২০৮px, mermaid ৪৫vh-সীমায় ১৭৭×২৬০px); tsc-তে src/ পরিষ্কার → কোড-ভাঙা নেই। প্রোডাকশনে "কিছুই না দেখানো"র সম্ভাব্য কারণ: ক্যাশ মোছার পরে সব প্রশ্ন নতুন করে ইঞ্জিনে গেছে + SVG-উত্তর টোকেন-খুঁকি → ফ্রি কোটা শেষ → উত্তরই আসেনি
+- ৪ প্রজেক্ট যাচাই: HanaokaYuzu/Gemini-API (৩.৫k⭐, Python লাইব্রেরি — আলাদা সার্ভিস লাগে), OEvortex/Gemini-Chat-API (৩৮⭐, Python), ikhsan3adi/gemini-web2api (৪১⭐, Go, OpenAI-কম্প্যাটিবল, vision+tools), zexadev/gemini-web2api-go (৪৭০⭐, Go, OpenAI-কম্প্যাটিবল, cookie-pool অটো-রিনিউ, প্রক্সি-পুল, admin প্যানেল, নিখুঁত ডক)
+- Sandbox-এ সত্যিকারের পরীক্ষা: gemini-web2api-go v4.20.1 linux_amd64 বাইনারি নামিয়ে ৮০৮১-এ চালিয়ে নিরাপদ মোডে (কুকি ছাড়া) /v1/chat/completions-এ বাংলা প্রশ্ন → আসল জেমিনাই-উত্তর প্রমাণিত
+- তৃতীয় ইঞ্জিন 'gemini-web' ইন্টিগ্রেশন (OpenAI-কম্প্যাটিবল, নিজস্ব সার্ভার):
+  - types.ts: EngineId-তে 'gemini-web'; SettingsInfo-তে geminiWebEnabled?
+  - key-format.ts: detectKeyEngine-এ baseUrl|apiKey শনাক্তকরণ + isEngineId হেল্পার (db-মুক্ত — ক্লায়েন্ট-কম্পোনেন্ট নিরাপদ)
+  - keypool.ts: states-এ 'gemini-web' (রাউন্ড-রবিন/ব্রেকার/ফেইলওভার স্বয়ংক্রিয়ভাবেই চলে)
+  - gemini-web.ts (নতুন): baseUrl|apiKey পার্স, /v1/chat/completions কল (system+user, ছবি হলে image_url data-URL), ৭৫সে টাইমআউট, 401/403→কী-বাদ, 429/5xx→ট্রানজিয়েন্ট
+  - ai-engine.ts: attemptWithModels-এ gemini-web শাখা; generateTutorAnswer-এ তিন-ইঞ্জিন অর্ডার — মূল আগে, ফলব্যাক ক্রমে বাকিরা; নিজস্ব-সার্ভার শেষে (ফ্রি কোটা শেষ হলে তবেই এই সার্ভারে চাপ)
+  - settings.ts/route: geminiWebEnabled (ডিফল্ট false) + primaryEngine ত্রিমুখী
+  - admin UI: keys-tab (ইঞ্জিন-ড্রপডাউনে Gemini Web + placeholder https://...|sk-...), models-tab (তৃতীয় ইঞ্জিন-কার্ড, Globe আইকন), settings-tab (রেডিও তৃতীয় কার্ড + সুইচ + কী-ফরম্যাট নোট)
+- E2E প্রমাণ: /api/admin/keys-তে gemini-web কী যোগ → settings-এ চালু → ছাত্র-লগইনে /api/chat প্রশ্ন → DB-অডিটে answerEngine: 'gemini-web', answerModel: 'gemini-3.5-flash-lite', সঠিক বাংলা উত্তর — Google API-কী ছাড়াই
+- পরিষ্কার: টেস্ট-সেটিং ফেরত (gemini-web বন্ধ, জেমিনাই/Z.ai চালু)
+
+Stage Summary:
+- এখন ৩-ইঞ্জিন সিস্টেম: জেমিনাই (AI Studio) / Z.ai GLM / Gemini Web (নিজস্ব সার্ভার, কোটা-মুক্ত) — ফলব্যাক চেইন অটো
+- অ্যাডমিনকে যা করতে হবে: নিজস্ব VPS/হোম-সার্ভারে gemini-web2api-go চালিয়ে (এক লাইন: বাইনারি ডাউনলোড → ./gw --port 8083 --admin-token X), "API কী" ট্যাবে https://সার্ভার:8083|sk-... কী যোগ, "সেটিংস" ট্যাবে Gemini Web চালু
+- ঝুঁকি-নোট: এটা গুগল-ওয়েব রিভার্স-প্রক্সি — গুগল ToS-বিরোধী, কুকি-অ্যাকাউন্ট ব্যবহার করলে ব্যান-ঝুঁকি; নিরাপদ মোডে (কুকি ছাড়া) flash-lite/flash পাওয়া যায়; গুগল প্রোটোকল বদলালে প্রক্সি আপডেট লাগবে
+- lint+tsc পরিষ্কার; লোকাল রেন্ডার প্রমাণিত — প্রোডাকশনে ছবি না-দেখানোর কারণ কোটা, কোড নয়

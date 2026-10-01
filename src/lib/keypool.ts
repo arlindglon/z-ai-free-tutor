@@ -20,6 +20,7 @@ type EngineState = {
 const states: Record<EngineId, EngineState> = {
   gemini: { cache: null, rrIndex: 0, downUntil: 0 },
   zai: { cache: null, rrIndex: 0, downUntil: 0 },
+  'gemini-web': { cache: null, rrIndex: 0, downUntil: 0 },
 }
 
 // ব্রেকার ৪৫ সেকেন্ড — পুরো পুল একবার ফেইল হলে ৪৫ সে পর আবার সুযোগ নেয়।
@@ -39,12 +40,13 @@ export function nextEngineWakeMs(): number {
   return positive.length ? Math.min(...positive) : 0
 }
 
-/** নির্দিষ্ট ইঞ্জিনের কী-ক্যাশ ভাঙো; engine না দিলে দুটোই */
+/** নির্দিষ্ট ইঞ্জিনের কী-ক্যাশ ভাঙো; engine না দিলে সবগুলো */
 export function invalidateKeyCache(engine?: EngineId): void {
   if (engine) states[engine].cache = null
   else {
     states.gemini.cache = null
     states.zai.cache = null
+    states['gemini-web'].cache = null
   }
 }
 

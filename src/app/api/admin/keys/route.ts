@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { getSessionUser, forbidden, unauthorized } from '@/lib/session'
 import { invalidateKeyCache } from '@/lib/keypool'
 import { detectKeyEngine } from '@/lib/key-format'
+import { isEngineId } from '@/lib/key-format'
 
 function maskKey(key: string): string {
   if (key.length <= 12) return '••••••••'
@@ -28,7 +29,7 @@ function toInfo(k: {
 }) {
   return {
     id: k.id,
-    engine: k.engine === 'zai' ? 'zai' : 'gemini',
+    engine: isEngineId(k.engine) ? k.engine : 'gemini',
     label: k.label,
     masked: maskKey(k.key),
     active: k.active,
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
   const key = String(body.key ?? '').replace(/\s+/g, '')
   const label = String(body.label ?? '').trim() || null
   // ফরম্যাট থেকে ইঞ্জিন বের করো — ড্রপডাউন ভুল থাকলেও অটো ঠিক হয়ে যায়
-  const engine = detectKeyEngine(key) ?? (body.engine === 'zai' ? 'zai' : 'gemini')
+  const engine = detectKeyEngine(key) ?? (isEngineId(body.engine) ? body.engine : 'gemini')
 
   if (key.length < 20) {
     return NextResponse.json(

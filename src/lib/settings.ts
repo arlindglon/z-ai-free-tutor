@@ -9,6 +9,8 @@ export type AppSettings = {
   geminiEnabled: boolean
   zaiEnabled: boolean
   fallbackEnabled: boolean
+  /** 🌐 তৃতীয় ইঞ্জিন — নিজস্ব সার্ভারের gemini-web প্রক্সি (কী = baseUrl|apiKey) */
+  geminiWebEnabled: boolean
   /** RAG লক — চালু থাকলে শুধু বইয়ের রেফারেন্স থেকেই উত্তর দেবে */
   ragOnlyMode: boolean
   /** ⚡ উত্তর-ক্যাশ — চালু থাকলে রিপিট প্রশ্নে ক্যাশ থেকে তাৎক্ষণিক উত্তর (ইঞ্জিন-খরচ শূন্য) */
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   geminiEnabled: true,
   zaiEnabled: true,
   fallbackEnabled: true,
+  geminiWebEnabled: false, // সার্ভার ডেপ্লয় করে কী যোগ করার পরে অ্যাডমিন চালু করবে
   ragOnlyMode: false,
   cacheEnabled: true,
 }
@@ -43,10 +46,12 @@ export async function getSettings(): Promise<AppSettings> {
     chatModel: map.chatModel || DEFAULT_SETTINGS.chatModel,
     embeddingModel: map.embeddingModel || DEFAULT_SETTINGS.embeddingModel,
     dailyCredits: Number(map.dailyCredits) || DEFAULT_SETTINGS.dailyCredits,
-    primaryEngine: map.primaryEngine === 'zai' ? 'zai' : 'gemini',
+    primaryEngine:
+      map.primaryEngine === 'zai' || map.primaryEngine === 'gemini-web' ? map.primaryEngine : 'gemini',
     geminiEnabled: parseBool(map.geminiEnabled, DEFAULT_SETTINGS.geminiEnabled),
     zaiEnabled: parseBool(map.zaiEnabled, DEFAULT_SETTINGS.zaiEnabled),
     fallbackEnabled: parseBool(map.fallbackEnabled, DEFAULT_SETTINGS.fallbackEnabled),
+    geminiWebEnabled: parseBool(map.geminiWebEnabled, DEFAULT_SETTINGS.geminiWebEnabled),
     ragOnlyMode: parseBool(map.ragOnlyMode, DEFAULT_SETTINGS.ragOnlyMode),
     cacheEnabled: parseBool(map.cacheEnabled, DEFAULT_SETTINGS.cacheEnabled),
   }
@@ -61,12 +66,13 @@ export async function putSettings(patch: Partial<AppSettings>): Promise<AppSetti
   if (patch.dailyCredits !== undefined && Number(patch.dailyCredits) > 0 && Number(patch.dailyCredits) <= 1000) {
     entries.push(['dailyCredits', String(Math.floor(Number(patch.dailyCredits)))])
   }
-  if (patch.primaryEngine === 'gemini' || patch.primaryEngine === 'zai') {
+  if (patch.primaryEngine === 'gemini' || patch.primaryEngine === 'zai' || patch.primaryEngine === 'gemini-web') {
     entries.push(['primaryEngine', patch.primaryEngine])
   }
   if (typeof patch.geminiEnabled === 'boolean') entries.push(['geminiEnabled', String(patch.geminiEnabled)])
   if (typeof patch.zaiEnabled === 'boolean') entries.push(['zaiEnabled', String(patch.zaiEnabled)])
   if (typeof patch.fallbackEnabled === 'boolean') entries.push(['fallbackEnabled', String(patch.fallbackEnabled)])
+  if (typeof patch.geminiWebEnabled === 'boolean') entries.push(['geminiWebEnabled', String(patch.geminiWebEnabled)])
   if (typeof patch.ragOnlyMode === 'boolean') entries.push(['ragOnlyMode', String(patch.ragOnlyMode)])
   if (typeof patch.cacheEnabled === 'boolean') entries.push(['cacheEnabled', String(patch.cacheEnabled)])
   for (const [key, value] of entries) {
