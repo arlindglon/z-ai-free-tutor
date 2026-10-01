@@ -125,7 +125,7 @@ export function KeysTab() {
       <Alert className="rounded-2xl border-emerald-200 bg-emerald-50 text-emerald-900">
         <Info className="h-4 w-4 text-emerald-600" />
         <AlertDescription className="text-emerald-800">
-          দুই ইঞ্জিনেই যত খুশি ফ্রি API কী যোগ করো — সিস্টেম অটো রাউন্ড-রবিন লোড ব্যালেন্সিং করবে:
+          প্রতি ইঞ্জিনেই যত খুশি ফ্রি API কী যোগ করো — সিস্টেম অটো রাউন্ড-রবিন লোড ব্যালেন্সিং করবে:
           Gemini key নাও Google AI Studio থেকে (aistudio.google.com/apikey), আর Z.ai key নাও z.ai Model
           API থেকে। কোনো কী রেট-লিমিট (429) খেলে মুহূর্তেই পরের কী-তে চলে যাবে — এক ইঞ্জিন ব্যস্ত হলে
           অন্য ইঞ্জিন অটো উত্তর দেবে (সেটিংস ট্যাবে মূল ইঞ্জিন বাছাই)।
@@ -150,10 +150,20 @@ export function KeysTab() {
                 <SelectContent>
                   <SelectItem value="gemini">জেমিনাই (Google AI Studio)</SelectItem>
                   <SelectItem value="zai">Z.ai GLM (z.ai Model API)</SelectItem>
-                  <SelectItem value="gemini-web">Gemini Web (নিজস্ব সার্ভার)</SelectItem>
+                  <SelectItem value="gemini-web">Gemini Web (নিজের সার্ভার — না থাকলে বাদ দাও)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {engine === 'gemini-web' && (
+              <Alert className="rounded-xl border-amber-200 bg-amber-50">
+                <AlertDescription className="text-xs leading-relaxed text-amber-800">
+                  ⚠️ মনে রাখো: Gemini Web-এর “কী” আসলে Google-এর API কী নয় — এটা তোমার নিজে চালানো সার্ভারের ঠিকানা
+                  (baseUrl|apiKey)। VPS বা হোম-সার্ভার ২৪ ঘণ্টা না চালালে এই ইঞ্জিন কাজ করবে না (Vercel-এও নয়)।
+                  সার্ভার না থাকলে ইঞ্জিন বদলে “জেমিনাই” বাছো — Google AI Studio থেকে একদম ফ্রি কী পাওয়া যায়
+                  (aistudio.google.com/apikey)।
+                </AlertDescription>
+              </Alert>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="key-label" className="text-stone-700">

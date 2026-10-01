@@ -229,7 +229,7 @@ export function SettingsTab() {
                 <Globe className="h-4 w-4 shrink-0 text-sky-600" />
                 <div className="min-w-0">
                   <p className="text-sm font-semibold text-stone-800">Gemini Web</p>
-                  <p className="text-xs text-stone-500">নিজস্ব সার্ভার (কোটা-মুক্ত)</p>
+                  <p className="text-xs text-stone-500">নিজের সার্ভার ছাড়া চলে না</p>
                 </div>
               </label>
             </RadioGroup>
@@ -283,6 +283,13 @@ export function SettingsTab() {
                 className="data-[state=checked]:bg-sky-600"
               />
             </div>
+            {geminiWebEnabled && (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-xs leading-relaxed text-amber-800">
+                ⚠️ সাবধান: “Gemini Web” Google-এর API নয় — এটা তোমার নিজের চালানো সার্ভারের (VPS/হোম-সার্ভার) ঠিকানা।
+                নিজের সার্ভার ২৪ ঘণ্টা চালু না থাকলে এই ইঞ্জিনের কোনো কী কাজ করবে না — Vercel-এর ফ্রি ডেপ্লয়েও চলে না।
+                সার্ভার চালানোর ব্যবস্থা নেই? তাহলে এই সুইচ বন্ধ রাখো — জেমিনাই (AI Studio) বা Z.ai-এর ফ্রি কী-ই সব কাজ করে।
+              </p>
+            )}
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-stone-800">অটো-ফলব্যাক</p>
