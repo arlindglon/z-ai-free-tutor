@@ -1,7 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bot, Cpu, Loader2, Lock, Save, Sparkles, Zap } from 'lucide-react'
+import { Bot, Cpu, Loader2, Lock, Save, Sparkles, Trash2, Zap } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -27,6 +37,10 @@ export function SettingsTab() {
   const [ragOnlyMode, setRagOnlyMode] = useState(false)
   // ⚡ উত্তর-ক্যাশ চালু/বন্ধ
   const [cacheEnabled, setCacheEnabled] = useState(true)
+  // 🗑️ ক্যাশ মোছার নিশ্চিতকরণ + প্রোগ্রেস
+  const [clearing, setClearing] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearDone, setClearDone] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -116,6 +130,24 @@ export function SettingsTab() {
       setError(e instanceof ApiError ? e.message : 'সেভ করা গেল না, আবার চেষ্টা করো।')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // 🗑️ জমানো সব ক্যাশ-উত্তর মুছে দাও — নতুন চিত্র-স্টাইল/প্রম্পটে প্রশ্নগুলো আবার তৈরি হবে
+  async function handleClearCache() {
+    if (clearing) return
+    setClearing(true)
+    setError(null)
+    try {
+      const data = await api<{ deleted: number }>('/api/admin/cache', { method: 'DELETE' })
+      setClearOpen(false)
+      setClearDone(`ক্যাশ মুছে গেছে ✓ (${data.deleted}টি জমানো উত্তর) — এখন থেকে সব প্রশ্ন নতুন করে উত্তর হবে।`)
+      setTimeout(() => setClearDone(null), 8000)
+    } catch (e) {
+      setClearOpen(false)
+      setError(e instanceof ApiError ? e.message : 'ক্যাশ মোছা গেল না, আবার চেষ্টা করো।')
+    } finally {
+      setClearing(false)
     }
   }
 
@@ -314,6 +346,30 @@ export function SettingsTab() {
             বন্ধ করলে প্রতিটি প্রশ্ন সরাসরি AI-ইঞ্জিনে যাবে (নতুন উত্তর ক্যাশে জমাও হবে না) —
             তখন পরিসংখ্যানের "ক্যাশ-হিট" বাড়বে না।
           </p>
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-100 bg-amber-50/60 p-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-stone-800">জমানো ক্যাশ মুছে দাও</p>
+              <p className="text-xs leading-relaxed text-stone-500">
+                পুরনো উত্তর/চিত্র-স্টাইল বদলালে এখান থেকে জমানো সব ক্যাশ মুছে দাও —
+                তখন থেকে সব প্রশ্ন নতুন করে উত্তর হবে (প্রথমবার একটু সময় লাগবে)।
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setClearOpen(true)}
+              className="h-9 shrink-0 gap-1.5 rounded-full border-amber-300 px-3 text-amber-800 hover:bg-amber-100 hover:text-amber-900"
+            >
+              <Trash2 className="h-4 w-4" />
+              ক্যাশ মুছুন
+            </Button>
+          </div>
+          {clearDone && (
+            <Alert className="rounded-xl border-emerald-200 bg-emerald-50">
+              <AlertDescription className="text-sm text-emerald-800">{clearDone}</AlertDescription>
+            </Alert>
+          )}
         </CardContent>
       </Card>
 
@@ -402,6 +458,36 @@ export function SettingsTab() {
         </Button>
         </CardContent>
       </Card>
+
+      {/* 🗑️ ক্যাশ-মোছার নিশ্চিতকরণ */}
+      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
+        <AlertDialogContent className="rounded-2xl border-amber-200">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-stone-800">সব ক্যাশ-উত্তর মুছে ফেলবে?</AlertDialogTitle>
+            <AlertDialogDescription className="leading-relaxed">
+              জমানো সব উত্তর মুছে যাবে — ছাত্ররা একই প্রশ্ন আবার করলে তা নতুন করে
+              AI-ইঞ্জিনে উত্তর হবে (আবার নতুন ক্যাশে জমা পড়বে)। চিত্র-স্টাইল বা
+              প্রম্পট বদলানোর পরে এটাই করা হয়। মোছা উত্তর আর ফেরত আসবে না।
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={clearing} className="rounded-full">
+              থাক, রাখো
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={clearing}
+              onClick={(e) => {
+                e.preventDefault()
+                void handleClearCache()
+              }}
+              className="rounded-full bg-rose-600 text-white hover:bg-rose-700"
+            >
+              {clearing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              {clearing ? 'মুছছে…' : 'হ্যাঁ, মুছে দাও'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

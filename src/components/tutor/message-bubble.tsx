@@ -94,10 +94,12 @@ function DiagramFrame({ html, aspect }: { html: string; aspect?: number }) {
           বড় করে দেখো
         </Button>
       </figcaption>
-      {/* ইনলাইন ভিউ — viewBox-অনুযায়ী aspect-ratio লক করা, svg প্রস্থের ১০০% — কোনো অনুভূমিক স্ক্রল নেই */}
+      {/* ইনলাইন ভিউ — কমপ্যাক্ট: সর্বোচ্চ ~৪৫vh উঁচু, তার বেশি হলে সমানুপাতে ছোট হয়ে মাঝে বসে।
+          ছাত্র ৯০% মোবাইলে — পুরো চিত্র এক নজরে, উপর-নিচ স্ক্রল শেষ; বিস্তারিত দেখতে 🔍 "বড় করে দেখো"।
+          viewBox-অনুযায়ী aspect-ratio লক + preserveAspectRatio meet → কখনো কাটা/বিকৃত হয় না */}
       <div
-        className="mx-auto w-full px-2 py-2 [&_svg]:block [&_svg]:h-auto [&_svg]:max-w-none [&_svg]:w-full"
-        style={aspect ? { aspectRatio: String(aspect) } : undefined}
+        className="mx-auto flex w-full items-center justify-center px-2 py-2 [&_svg]:block [&_svg]:h-auto [&_svg]:max-h-[45vh] [&_svg]:max-w-full [&_svg]:w-full"
+        style={{ maxHeight: '45vh', ...(aspect ? { aspectRatio: String(aspect) } : {}) }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
       <Dialog open={open} onOpenChange={setOpen}>
@@ -195,6 +197,8 @@ function MermaidBlock({ code }: { code: string }) {
           securityLevel: 'strict',
           theme: 'neutral',
           fontFamily: 'inherit',
+          // কমপ্যাক্ট ফ্লোচার্ট — কম ফাঁক মানে মোবাইলে ছোট উঁচু চিত্র, লেবেল এক নজরে পড়া যায়
+          flowchart: { nodeSpacing: 22, rankSpacing: 30, padding: 6 },
         })
         const id = `mmd-${Math.random().toString(36).slice(2)}`
         // আগে রিপেয়ার-করা কোড, ফেল করলে মূল কোড — দুইবার সুযোগ
@@ -214,6 +218,10 @@ function MermaidBlock({ code }: { code: string }) {
     }
   }, [code])
 
+  // mermaid-নিজস্ব width/max-width/height স্টাইল সরিয়ে SVG-এর মতোই ফ্লুইড+কমপ্যাক্ট করা —
+  // নইলে লম্বা ফ্লোচার্ট মোবাইলে কয়েক স্ক্রিন জুড়ে বসে (hook — কন্ডিশনাল রিটার্নের আগেই)
+  const fluid = useMemo(() => (svg ? fluidifySvg(svg) : null), [svg])
+
   if (failed) {
     return (
       <pre className="my-2 overflow-x-auto rounded-lg bg-stone-900 p-3 text-sm text-stone-100">
@@ -221,14 +229,14 @@ function MermaidBlock({ code }: { code: string }) {
       </pre>
     )
   }
-  if (!svg) {
+  if (!svg || !fluid) {
     return (
       <div className="my-2 rounded-xl border border-emerald-100 bg-emerald-50/50 px-3 py-2 text-xs text-emerald-700">
         ছবি এঁকে হচ্ছে…
       </div>
     )
   }
-  return <DiagramFrame html={svg} />
+  return <DiagramFrame html={fluid.html} aspect={fluid.aspect} />
 }
 
 /** মার্কডাউন → স্টাইলড এলিমেন্ট (KaTeX-সহ)। মডিউল লেভেলে একবারই তৈরি। */
