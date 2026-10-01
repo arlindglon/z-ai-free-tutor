@@ -119,6 +119,8 @@ async function zaiHttp(apiKey: string, system: string, prompt: string, model?: s
         { role: 'user', content: userContent(prompt, image) },
       ],
       thinking: { type: 'disabled' },
+      // টোকেন-বাজেট বিশাল — ডিফল্ট ছোট হলে মডেল বিস্তারিত SVG-চিত্র এঁকে মাঝপথে থেমে যায়
+      max_tokens: 8192,
     }),
   })
   if (!res.ok) {
@@ -199,6 +201,7 @@ export async function zaiChat(system: string, prompt: string, model?: string, im
       { role: 'user', content: prompt },
     ],
     thinking: { type: 'disabled' },
+    max_tokens: 8192,
   })
   const text = completion.choices[0]?.message?.content ?? ''
   if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')
