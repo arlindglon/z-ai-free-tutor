@@ -105,37 +105,47 @@ function userContent(prompt: string, image?: ChatImage): string | Array<Record<s
   ]
 }
 
+/** max_tokens-সিঁড়ি — সর্বোচ্চ সম্ভাব্য বাজেট, তবু কোনো মডেলেই ফলব্যাক ভাঙবে না:
+ *  আধুনিক মডেল (প্রোব-প্রমাণিত সীমা [১, ৯৮,৩০৪]) প্রথম ধাপেই ৬৫,৫৩৬ পায় — বিস্তারিত SVG-চিত্রের
+ *  জন্য ~১৯× হেডরুম; পুরনো/ছোট-সীমার মডেল ৪০০-এরর দিলে ধাপে নেমে চলে (৮১৯২ → ২০৪৮) —
+ *  উত্তর কখনো খালি হাতে ফেরে না। ২৫০k-জাতীয় মডেল-সীমার বাইরের মান রাখা যায় না —
+ *  প্রতিটা রিকোয়েস্টে ৪০০→নামা খেয়ে লেটেন্সি দ্বিগুণ হতো */
+const MAX_TOKENS_LADDER = [65536, 8192, 2048]
+
 async function zaiHttp(apiKey: string, system: string, prompt: string, model?: string, image?: ChatImage): Promise<string> {
-  const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: model || ENV_MODEL,
-      messages: [
-        { role: 'assistant', content: system },
-        { role: 'user', content: userContent(prompt, image) },
-      ],
-      thinking: { type: 'disabled' },
-      // টোকেন-বাজেট বিশাল — ডিফল্ট ছোট হলে মডেল বিস্তারিত SVG-চিত্র এঁকে মাঝপথে থেমে যায়
-      max_tokens: 8192,
-    }),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    // মডেল-না-পাওয়া আলাদা করে চিনাও (Z.ai 404/কোড 1211 দেয়) — তাহলে ai-engine
-    // নিঃশব্দে পরের চালু মডেল চেষ্টা করতে পারে, কী-পুল/ব্রেকার না জ্বালিয়ে
-    if (res.status === 404 || /"code"\s*:\s*"?1211"?|model.{0,40}(not exist|not found|invalid)|不存在/i.test(body)) {
-      throw new Error(`ZAI_MODEL_NOT_FOUND (HTTP ${res.status}): ${body.slice(0, 200)}`)
+  for (let rung = 0; ; rung++) {
+    const res = await fetch(`${ENV_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: model || ENV_MODEL,
+        messages: [
+          { role: 'assistant', content: system },
+          { role: 'user', content: userContent(prompt, image) },
+        ],
+        thinking: { type: 'disabled' },
+        max_tokens: MAX_TOKENS_LADDER[rung] ?? 2048,
+      }),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      // max_tokens-সীমা ছাড়িয়ে গেলে (৪০০ + "max_tokens" এরর) পরের ছোট ধাপে আরেকবার
+      if (res.status === 400 && /max_tokens/i.test(body) && rung + 1 < MAX_TOKENS_LADDER.length) continue
+      // মডেল-না-পাওয়া আলাদা করে চিনাও (Z.ai 404/কোড 1211 দেয়) — তাহলে ai-engine
+      // নিঃশব্দে পরের চালু মডেল চেষ্টা করতে পারে, কী-পুল/ব্রেকার না জ্বালিয়ে
+      if (res.status === 404 || /"code"\s*:\s*"?1211"?|model.{0,40}(not exist|not found|invalid)|不存在/i.test(body)) {
+        throw new Error(`ZAI_MODEL_NOT_FOUND (HTTP ${res.status}): ${body.slice(0, 200)}`)
+      }
+      throw new Error(`ZAI_ENV_HTTP_${res.status}: ${body.slice(0, 200)}`)
     }
-    throw new Error(`ZAI_ENV_HTTP_${res.status}: ${body.slice(0, 200)}`)
+    const data = (await res.json()) as OpenAiLikeResponse
+    const text = data.choices?.[0]?.message?.content ?? ''
+    if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')
+    return text
   }
-  const data = (await res.json()) as OpenAiLikeResponse
-  const text = data.choices?.[0]?.message?.content ?? ''
-  if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')
-  return text
 }
 
 async function zaiCall(apiKey: string, system: string, prompt: string, model?: string, image?: ChatImage): Promise<string> {
@@ -201,7 +211,9 @@ export async function zaiChat(system: string, prompt: string, model?: string, im
       { role: 'user', content: prompt },
     ],
     thinking: { type: 'disabled' },
-    max_tokens: 8192,
+    // HTTP-পথের সিঁড়ির শীর্ষ-ধাপের সঙ্গে সমঞ্চস (৬৫,৫৩৬ প্রোবে প্রমাণিত গৃহীত) —
+    // ডিফল্ট ছোট হলে বিস্তারিত SVG-চিত্র মাঝপথে থেমে যায়
+    max_tokens: 65536,
   })
   const text = completion.choices[0]?.message?.content ?? ''
   if (!text.trim()) throw new Error('ZAI_EMPTY_RESPONSE')

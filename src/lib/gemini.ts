@@ -83,9 +83,11 @@ export async function generateContent(prompt: string, system: string, model: str
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts }],
-        // টোকেন-বাজেট বিশাল — নইলে মডেল লম্বা গদ্য লেখা শেষে চিত্র খর্ব করে (লেবেলহীন ন্যুন্য আঁকা):
-        // ২০৪৮-এ ছিল → ফুল/কোষের চিত্রে ৩-৪টা আকৃতি এঁকেই থেমে যেত; ৮১৯২-তে বিস্তারিত SVG + পূর্ণ গদ্য দুটোই আঁটে
-        generationConfig: { temperature: 0.4, maxOutputTokens: 8192 },
+        // টোকেন-সীমা সম্পূর্ণ সরানো — maxOutputTokens না দিলে মডেল নিজের সর্বোচ্চ আউটপুট-বাজেট পায়
+        // (ফ্ল্যাশ-পরিবারে ৬৫,৫৩৬ = পুরনো ২০৪৮-এর ৩২ গুণ)। নির্দিষ্ট সীমা থাকলে মডেল লম্বা গদ্য লেখা শেষে
+        // চিত্র খর্ব করত (লেবেলহীন ন্যুন্য আঁকা); আর মডেল-সীমার বাইরের মান (যেমন ২৫০k) দিলে API 400-এরর
+        // দিয়ে উত্তরই আটকে দেয় — তাই সীমার জায়গায় মডেলের নিজস্ব সর্বোচ্চই সর্বোচ্চ সম্ভব
+        generationConfig: { temperature: 0.4 },
       }),
     })
     const data = await parseResponse(res)
